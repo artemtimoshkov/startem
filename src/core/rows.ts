@@ -16,6 +16,7 @@ import type {
   Area,
   CadenceType,
   CheckinStatus,
+  ClockTime,
   Goal,
   GoalStatus,
   Importance,
@@ -27,8 +28,9 @@ import type {
 } from './types'
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+const CLOCK_TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/
 
-const CADENCE_TYPES: CadenceType[] = ['weekly', 'monthly', 'quarterly', 'once']
+const CADENCE_TYPES: CadenceType[] = ['daily', 'weekly', 'monthly', 'quarterly', 'once']
 const IMPORTANCES: Importance[] = ['high', 'medium', 'low']
 const GOAL_STATUSES: GoalStatus[] = ['active', 'frozen']
 const CHECKIN_STATUSES: CheckinStatus[] = ['done', 'skipped']
@@ -83,6 +85,22 @@ function requireDate(value: unknown, fallback: ISODate): ISODate {
   return asDate(value, fallback) ?? fallback
 }
 
+/**
+ * Keeps an `HH:MM` local wall-clock string, or null.
+ *
+ * A time is never widened into a timestamp: §2 stores days, and a task at
+ * 07:30 means half seven wherever the phone happens to be, not an instant
+ * that moves when it crosses a border.
+ */
+export function asTime(value: unknown): ClockTime | null {
+  if (typeof value !== 'string') return null
+  const s = value.trim()
+  if (CLOCK_TIME_RE.test(s)) return s
+  // `07:30:00` from a Postgres `time` column, or `07:30 ` from an input.
+  const head = s.slice(0, 5)
+  return CLOCK_TIME_RE.test(head) ? head : null
+}
+
 /** Weekday list for a weekly action: unique, sorted, 0–6, Monday-first. */
 export function normaliseDays(value: unknown): number[] {
   const raw = Array.isArray(value)
@@ -134,6 +152,11 @@ export function normaliseArea(raw: Record<string, unknown>, index = 0): Area {
   }
 }
 
+/**
+ * A goal carries no importance any more — priority is the task's (§3). An
+ * export written before that change still has the column; it is read here
+ * only to seed the tasks underneath it, in `normaliseSnapshot`.
+ */
 export function normaliseGoal(raw: Record<string, unknown>, today: ISODate): Goal {
   return {
     id: asInt(raw['id'], 0),
@@ -141,10 +164,15 @@ export function normaliseGoal(raw: Record<string, unknown>, today: ISODate): Goa
     title: asText(raw['title']),
     description: asText(raw['description']),
     status: asEnum(raw['status'], GOAL_STATUSES, 'active'),
-    importance: asEnum(raw['importance'], IMPORTANCES, 'medium'),
     created_at: requireDate(raw['created_at'], today),
     ...normaliseSyncMeta(raw),
   }
+}
+
+/** What a task inherits from the goal it hangs on, when its own row is silent. */
+export interface SubgoalContext {
+  area_id?: number
+  importance?: Importance
 }
 
 /**
@@ -153,9 +181,14 @@ export function normaliseGoal(raw: Record<string, unknown>, today: ISODate): Goa
  * `month_weekday` selects weekday mode, so the fixed day is dropped rather
  * than left lying around to confuse a later read.
  */
-export function normaliseSubgoal(raw: Record<string, unknown>, today: ISODate): Subgoal {
+export function normaliseSubgoal(
+  raw: Record<string, unknown>,
+  today: ISODate,
+  context: SubgoalContext = {},
+): Subgoal {
   const cadence = asEnum(raw['cadence_type'], CADENCE_TYPES, 'weekly')
   const recursMonthly = cadence === 'monthly' || cadence === 'quarterly'
+  const recurs = cadence !== 'once'
 
   const rawWeekday = raw['month_weekday']
   const weekdayMode =
@@ -173,16 +206,36 @@ export function normaliseSubgoal(raw: Record<string, unknown>, today: ISODate): 
   const normalisedWeight =
     weight == null || weight === '' ? null : Math.max(1, asInt(weight, 1))
 
+  const rawGoal = raw['goal_id']
+  const goalId = rawGoal == null || rawGoal === '' ? null : asInt(rawGoal, 0) || null
+
+  const rawInterval = raw['interval']
+  const interval =
+    rawInterval == null || rawInterval === '' ? 1 : Math.max(1, asInt(rawInterval, 1))
+
+  const start = recurs ? asDate(raw['start_date']) : null
+  const until = recurs ? asDate(raw['repeat_until']) : null
+
   return {
     id: asInt(raw['id'], 0),
-    goal_id: asInt(raw['goal_id'], 0),
+    // A task always scores against an area. An export written before tasks
+    // had one gets it from the goal it hangs on (§3).
+    area_id: asInt(raw['area_id'], context.area_id ?? 0),
+    goal_id: goalId,
     title: asText(raw['title']),
+    importance: asEnum(raw['importance'], IMPORTANCES, context.importance ?? 'medium'),
     cadence_type: cadence,
+    interval,
     days: cadence === 'weekly' ? normaliseDays(raw['days']) : [],
     monthly_day: fixedDay,
     month_weekday: weekdayMode,
     month_ordinal: weekdayMode == null ? null : normaliseOrdinal(raw['month_ordinal']),
     due_date: cadence === 'once' ? asDate(raw['due_date']) : null,
+    start_date: start,
+    // An end before the start would make the task permanently unscheduled
+    // while still looking live in the editor, so it is simply dropped.
+    repeat_until: until != null && start != null && until < start ? null : until,
+    time: asTime(raw['time']),
     weight: normalisedWeight,
     created_at: requireDate(raw['created_at'], today),
     archived: asBool(raw['archived']),
@@ -225,10 +278,24 @@ function rows(value: RawTable): Record<string, unknown>[] {
  */
 export function normaliseSnapshot(raw: unknown, today: ISODate): Snapshot {
   const src = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, RawTable>
+
+  // Read the goals *raw*, so that an export written when importance lived on
+  // the goal can hand it down to that goal's tasks before it is dropped.
+  const rawGoals = rows(src['goals'])
+  const context = new Map<number, SubgoalContext>()
+  for (const g of rawGoals) {
+    context.set(asInt(g['id'], 0), {
+      area_id: asInt(g['area_id'], 0),
+      importance: asEnum(g['importance'], IMPORTANCES, 'medium'),
+    })
+  }
+
   return {
     areas: rows(src['areas']).map(normaliseArea),
-    goals: rows(src['goals']).map((r) => normaliseGoal(r, today)),
-    subgoals: rows(src['subgoals']).map((r) => normaliseSubgoal(r, today)),
+    goals: rawGoals.map((r) => normaliseGoal(r, today)),
+    subgoals: rows(src['subgoals']).map((r) =>
+      normaliseSubgoal(r, today, context.get(asInt(r['goal_id'], 0)) ?? {}),
+    ),
     checkins: rows(src['checkins']).map((r) => normaliseCheckin(r, today)),
     freezes: rows(src['freezes']).map((r) => normaliseFreeze(r, today)),
   }

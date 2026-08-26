@@ -62,11 +62,15 @@ export interface Index {
   areas: Area[]
   /** Live goals whose area exists, in area order then id order. */
   goals: Goal[]
+  /** Live, non-archived tasks whose area — and goal, when it has one — exist. */
+  tasks: Subgoal[]
   areaById: Map<number, Area>
   goalById: Map<number, Goal>
   subgoalById: Map<number, Subgoal>
-  /** Live, non-archived actions per goal. */
+  /** Tasks per goal. A task with no goal appears in none of these. */
   subgoalsByGoal: Map<number, Subgoal[]>
+  /** Every task in an area, goal or no goal. This is what scoring walks. */
+  subgoalsByArea: Map<number, Subgoal[]>
   goalsByArea: Map<number, Goal[]>
   freezesByGoal: Map<number, Freeze[]>
   checkinsBySubgoal: Map<number, Map<ISODate, Checkin>>
@@ -99,14 +103,23 @@ export function buildIndex(snapshot: Snapshot, today: ISODate): Index {
   for (const a of areas) goalsByArea.set(a.id, [])
   for (const g of goals) goalsByArea.get(g.area_id)!.push(g)
 
+  // A task belongs to an area outright; a goal is optional. One whose goal has
+  // been deleted would otherwise vanish along with its history, so it is kept
+  // and read as an area-level task.
   const subgoals = live(snapshot.subgoals)
-    .filter((s) => !s.archived && goalById.has(s.goal_id))
+    .filter((s) => !s.archived && areaById.has(s.area_id))
+    .map((s) => (s.goal_id != null && !goalById.has(s.goal_id) ? { ...s, goal_id: null } : s))
     .sort((a, b) => a.id - b.id)
   const subgoalById = new Map(subgoals.map((s) => [s.id, s]))
 
   const subgoalsByGoal = new Map<number, Subgoal[]>()
   for (const g of goals) subgoalsByGoal.set(g.id, [])
-  for (const s of subgoals) subgoalsByGoal.get(s.goal_id)!.push(s)
+  const subgoalsByArea = new Map<number, Subgoal[]>()
+  for (const a of areas) subgoalsByArea.set(a.id, [])
+  for (const s of subgoals) {
+    subgoalsByArea.get(s.area_id)!.push(s)
+    if (s.goal_id != null) subgoalsByGoal.get(s.goal_id)!.push(s)
+  }
 
   const freezesByGoal = new Map<number, Freeze[]>()
   for (const f of live(snapshot.freezes)) {
@@ -130,10 +143,12 @@ export function buildIndex(snapshot: Snapshot, today: ISODate): Index {
     today,
     areas,
     goals,
+    tasks: subgoals,
     areaById,
     goalById,
     subgoalById,
     subgoalsByGoal,
+    subgoalsByArea,
     goalsByArea,
     freezesByGoal,
     checkinsBySubgoal,
@@ -152,9 +167,30 @@ function actionsOf(idx: Index, goalId: number): readonly Subgoal[] {
   return idx.subgoalsByGoal.get(goalId) ?? []
 }
 
+/**
+ * The freeze periods that apply to a task: its goal's, or none at all.
+ *
+ * Freezing is a goal-level idea — it says "this whole line of work is paused"
+ * — so a task hanging straight off an area has nothing to freeze it (§5).
+ */
+export function taskFreezes(idx: Index, task: Subgoal): readonly Freeze[] {
+  return task.goal_id == null ? NO_FREEZES : freezesOf(idx, task.goal_id)
+}
+
+/** A task is live unless the goal above it has been frozen out of scoring (§5). */
+export function isTaskActive(idx: Index, task: Subgoal): boolean {
+  if (task.goal_id == null) return true
+  return idx.goalById.get(task.goal_id)?.status === 'active'
+}
+
 /** Frozen goals are excluded from every score and absent from the list (§5). */
-function activeGoals(idx: Index): Goal[] {
+export function activeGoals(idx: Index): Goal[] {
   return idx.goals.filter((g) => g.status === 'active')
+}
+
+/** Every task that still counts: the whole store minus anything frozen out. */
+function activeTasks(idx: Index): Subgoal[] {
+  return idx.tasks.filter((t) => isTaskActive(idx, t))
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +203,7 @@ export function goalTally(idx: Index, goal: Goal, weighted = true): Tally {
   const freezes = freezesOf(idx, goal.id)
   const tally = emptyTally()
   for (const action of actionsOf(idx, goal.id)) {
-    const w = weighted ? weightOf(goal, action) : 1
+    const w = weighted ? weightOf(action) : 1
     const t = tallyStanding(action, w, idx.today, checkinsOf(idx, action.id), freezes)
     tally.earned += t.earned
     tally.available += t.available
@@ -175,12 +211,21 @@ export function goalTally(idx: Index, goal: Goal, weighted = true): Tally {
   return tally
 }
 
-/** Standing-mode weighted pool across all active goals in one area. */
+/**
+ * Standing-mode weighted pool for one area: every live task in it, whether or
+ * not it hangs on a goal (§5).
+ */
 export function areaTally(idx: Index, areaId: number): Tally {
   const tally = emptyTally()
-  for (const goal of idx.goalsByArea.get(areaId) ?? []) {
-    if (goal.status !== 'active') continue
-    const t = goalTally(idx, goal)
+  for (const task of idx.subgoalsByArea.get(areaId) ?? []) {
+    if (!isTaskActive(idx, task)) continue
+    const t = tallyStanding(
+      task,
+      weightOf(task),
+      idx.today,
+      checkinsOf(idx, task.id),
+      taskFreezes(idx, task),
+    )
     tally.earned += t.earned
     tally.available += t.available
   }
@@ -203,10 +248,9 @@ export function goalRate(idx: Index, goal: Goal): number | null {
  * itself (§5).
  */
 export function actionRate(idx: Index, action: Subgoal): number | null {
-  const goal = idx.goalById.get(action.goal_id)
-  if (!goal || goal.status !== 'active') return null
+  if (!isTaskActive(idx, action)) return null
   return rateOf(
-    tallyStanding(action, 1, idx.today, checkinsOf(idx, action.id), freezesOf(idx, goal.id)),
+    tallyStanding(action, 1, idx.today, checkinsOf(idx, action.id), taskFreezes(idx, action)),
   )
 }
 
@@ -216,14 +260,18 @@ export function actionRate(idx: Index, action: Subgoal): number | null {
 
 export interface TodayItem {
   subgoal_id: number
-  goal_id: number
+  /** null for a task attached straight to its area. */
+  goal_id: number | null
   area_id: number
   title: string
-  goalTitle: string
+  /** null when the task has no goal — the area alone names it. */
+  goalTitle: string | null
   areaName: string
   importance: Importance
   weight: number
   cadence_type: Subgoal['cadence_type']
+  /** Optional time of day, `HH:MM`. Display only. */
+  time: string | null
   /** True for the one-time exception below. */
   once: boolean
   due_date: ISODate | null
@@ -263,43 +311,42 @@ export function buildToday(snapshot: Snapshot, today: ISODate): TodayView {
   const idx = buildIndex(snapshot, today)
   const items: TodayItem[] = []
 
-  for (const goal of activeGoals(idx)) {
-    const area = idx.areaById.get(goal.area_id)!
-    const freezes = freezesOf(idx, goal.id)
+  for (const action of activeTasks(idx)) {
+    const area = idx.areaById.get(action.area_id)!
+    const goal = action.goal_id == null ? null : (idx.goalById.get(action.goal_id) ?? null)
+    const freezes = taskFreezes(idx, action)
     const frozenToday = isFrozenOn(today, freezes)
-    for (const action of actionsOf(idx, goal.id)) {
-      const checkins = checkinsOf(idx, action.id)
-      const todayCheckin = checkins.get(today)
-      const once = action.cadence_type === 'once'
+    const checkins = checkinsOf(idx, action.id)
+    const todayCheckin = checkins.get(today)
+    const once = action.cadence_type === 'once'
 
-      let listed: boolean
-      if (once) {
-        // Pending (no check-in at all, ever) regardless of date, plus on the
-        // day it was resolved. Freezes and creation date still apply.
-        listed =
-          !frozenToday && action.created_at <= today && (checkins.size === 0 || !!todayCheckin)
-      } else {
-        listed = isScheduled(action, today, freezes)
-      }
-      if (!listed) continue
-
-      items.push({
-        subgoal_id: action.id,
-        goal_id: goal.id,
-        area_id: area.id,
-        title: action.title,
-        goalTitle: goal.title,
-        areaName: area.name,
-        importance: goal.importance,
-        weight: weightOf(goal, action),
-        cadence_type: action.cadence_type,
-        once,
-        due_date: action.due_date,
-        status: todayCheckin ? todayCheckin.status : null,
-        overdue:
-          once && !todayCheckin && action.due_date != null && action.due_date < today,
-      })
+    let listed: boolean
+    if (once) {
+      // Pending (no check-in at all, ever) regardless of date, plus on the
+      // day it was resolved. Freezes and creation date still apply.
+      listed =
+        !frozenToday && action.created_at <= today && (checkins.size === 0 || !!todayCheckin)
+    } else {
+      listed = isScheduled(action, today, freezes)
     }
+    if (!listed) continue
+
+    items.push({
+      subgoal_id: action.id,
+      goal_id: goal ? goal.id : null,
+      area_id: area.id,
+      title: action.title,
+      goalTitle: goal ? goal.title : null,
+      areaName: area.name,
+      importance: action.importance,
+      weight: weightOf(action),
+      cadence_type: action.cadence_type,
+      time: action.time,
+      once,
+      due_date: action.due_date,
+      status: todayCheckin ? todayCheckin.status : null,
+      overdue: once && !todayCheckin && action.due_date != null && action.due_date < today,
+    })
   }
 
   // Heaviest first, so the day's most important work is at the top. Area
@@ -308,7 +355,7 @@ export function buildToday(snapshot: Snapshot, today: ISODate): TodayView {
     (a, b) =>
       b.weight - a.weight ||
       idx.areaById.get(a.area_id)!.position - idx.areaById.get(b.area_id)!.position ||
-      a.goal_id - b.goal_id ||
+      (a.goal_id ?? 0) - (b.goal_id ?? 0) ||
       a.subgoal_id - b.subgoal_id,
   )
 
@@ -436,21 +483,18 @@ export function buildWeeklyStrip(
     const from = addDays(current, -7 * w)
     const to = addDays(from, 6)
     const tally = emptyTally()
-    for (const goal of activeGoals(idx)) {
-      const freezes = freezesOf(idx, goal.id)
-      for (const action of actionsOf(idx, goal.id)) {
-        const t = tallyRange(
-          action,
-          weightOf(goal, action),
-          from,
-          to,
-          today,
-          checkinsOf(idx, action.id),
-          freezes,
-        )
-        tally.earned += t.earned
-        tally.available += t.available
-      }
+    for (const action of activeTasks(idx)) {
+      const t = tallyRange(
+        action,
+        weightOf(action),
+        from,
+        to,
+        today,
+        checkinsOf(idx, action.id),
+        taskFreezes(idx, action),
+      )
+      tally.earned += t.earned
+      tally.available += t.available
     }
     const rate = rateOf(tally)
     bars.push({
@@ -562,24 +606,27 @@ export interface CalendarView {
 
 function totalsForDay(idx: Index, date: ISODate): DayTotals {
   const totals = emptyDayTotals(date)
-  for (const goal of activeGoals(idx)) {
-    const freezes = freezesOf(idx, goal.id)
-    for (const action of actionsOf(idx, goal.id)) {
-      const occ = occurrenceOn(action, date, idx.today, checkinsOf(idx, action.id), freezes)
-      if (!occ) continue
-      const weight = weightOf(goal, action)
-      // A day cell's ratio counts *all* weight due, including today's
-      // unresolved items — today reads as progress so far. The star excludes
-      // unresolved items instead. Both are right for their purpose (§6);
-      // do not "fix" one to match the other.
-      totals.total += weight
-      totals.count++
-      if (occ.status === 'done') {
-        totals.done += weight
-        totals.doneCount++
-      } else if (occ.status === 'skipped') {
-        totals.skipped += weight
-      }
+  for (const action of activeTasks(idx)) {
+    const occ = occurrenceOn(
+      action,
+      date,
+      idx.today,
+      checkinsOf(idx, action.id),
+      taskFreezes(idx, action),
+    )
+    if (!occ) continue
+    const weight = weightOf(action)
+    // A day cell's ratio counts *all* weight due, including today's
+    // unresolved items — today reads as progress so far. The star excludes
+    // unresolved items instead. Both are right for their purpose (§6);
+    // do not "fix" one to match the other.
+    totals.total += weight
+    totals.count++
+    if (occ.status === 'done') {
+      totals.done += weight
+      totals.doneCount++
+    } else if (occ.status === 'skipped') {
+      totals.skipped += weight
     }
   }
   totals.ratio = totals.total === 0 ? null : totals.done / totals.total
@@ -625,10 +672,12 @@ export function buildCalendar(
 
 export interface DayDetailItem {
   subgoal_id: number
-  goal_id: number
+  /** null for a task attached straight to its area. */
+  goal_id: number | null
   area_id: number
   title: string
-  goalTitle: string
+  /** null when the task has no goal. */
+  goalTitle: string | null
   areaName: string
   importance: Importance
   weight: number
@@ -661,46 +710,49 @@ export function buildDayDetail(
   const isToday = date === today
   const items: DayDetailItem[] = []
 
-  for (const goal of activeGoals(idx)) {
-    const area = idx.areaById.get(goal.area_id)!
-    const freezes = freezesOf(idx, goal.id)
+  for (const action of activeTasks(idx)) {
+    const area = idx.areaById.get(action.area_id)!
+    const goal = action.goal_id == null ? null : (idx.goalById.get(action.goal_id) ?? null)
+    const freezes = taskFreezes(idx, action)
     const frozen = isFrozenOn(date, freezes)
-    for (const action of actionsOf(idx, goal.id)) {
-      const checkins = checkinsOf(idx, action.id)
-      const checkin = checkins.get(date)
-      const occ = occurrenceOn(action, date, today, checkins, freezes)
-      const once = action.cadence_type === 'once'
-      // A one-time action still pending shows on today, so the checklist
-      // matches the Today list; on a past day it does not, because a task due
-      // next week was not owed back then (§6).
-      const pendingOnce =
-        once && isToday && !frozen && action.created_at <= date && !onceOccurrence(action, today, checkins, freezes)
+    const checkins = checkinsOf(idx, action.id)
+    const checkin = checkins.get(date)
+    const occ = occurrenceOn(action, date, today, checkins, freezes)
+    const once = action.cadence_type === 'once'
+    // A one-time action still pending shows on today, so the checklist
+    // matches the Today list; on a past day it does not, because a task due
+    // next week was not owed back then (§6).
+    const pendingOnce =
+      once &&
+      isToday &&
+      !frozen &&
+      action.created_at <= date &&
+      !onceOccurrence(action, today, checkins, freezes)
 
-      // Logged items always show, even if the cadence has since changed —
-      // the row describes a real day and the checklist must not hide it.
-      if (!occ && !checkin && !pendingOnce) continue
+    // Logged items always show, even if the cadence has since changed —
+    // the row describes a real day and the checklist must not hide it.
+    if (!occ && !checkin && !pendingOnce) continue
 
-      items.push({
-        subgoal_id: action.id,
-        goal_id: goal.id,
-        area_id: area.id,
-        title: action.title,
-        goalTitle: goal.title,
-        areaName: area.name,
-        importance: goal.importance,
-        weight: weightOf(goal, action),
-        once,
-        status: checkin ? checkin.status : occ ? occ.status : null,
-        wasDue: occ !== null,
-      })
-    }
+    items.push({
+      subgoal_id: action.id,
+      goal_id: goal ? goal.id : null,
+      area_id: area.id,
+      title: action.title,
+      goalTitle: goal ? goal.title : null,
+      areaName: area.name,
+      importance: action.importance,
+      weight: weightOf(action),
+      once,
+      status: checkin ? checkin.status : occ ? occ.status : null,
+      wasDue: occ !== null,
+    })
   }
 
   items.sort(
     (a, b) =>
       b.weight - a.weight ||
       idx.areaById.get(a.area_id)!.position - idx.areaById.get(b.area_id)!.position ||
-      a.goal_id - b.goal_id ||
+      (a.goal_id ?? 0) - (b.goal_id ?? 0) ||
       a.subgoal_id - b.subgoal_id,
   )
 

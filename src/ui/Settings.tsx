@@ -106,7 +106,7 @@ export function SettingsScreen() {
               [
                 ['Areas', counts.areas],
                 ['Goals', counts.goals],
-                ['Actions', counts.subgoals],
+                ['Tasks', counts.subgoals],
                 ['Check-ins', counts.checkins],
                 ['Freeze periods', counts.freezes],
               ] as const
@@ -195,7 +195,7 @@ export function SettingsScreen() {
 
         {result ? (
           <p style={{ fontSize: 13, marginTop: 12, marginBottom: 0 }}>
-            Imported {result.areas} areas, {result.goals} goals, {result.subgoals} actions,{' '}
+            Imported {result.areas} areas, {result.goals} goals, {result.subgoals} tasks,{' '}
             {result.checkins} check-ins and {result.freezes} freeze periods.
           </p>
         ) : null}

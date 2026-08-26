@@ -3,7 +3,7 @@
 import './theme.css'
 import { DataProvider, useData } from './DataContext'
 import { RouterProvider, Link, useMatch } from './router'
-import { TodayScreen } from './Today'
+import { TaskScreen, TasksScreen } from './Tasks'
 import { AreaScreen, StarScreen } from './Star'
 import { GoalEditorScreen, GoalScreen } from './Goal'
 import { CalendarScreen, DayScreen } from './Calendar'
@@ -12,6 +12,7 @@ import { ServiceWorkerNotice } from './serviceWorker'
 
 const ROUTES = [
   '/',
+  '/tasks/:id',
   '/star',
   '/areas/:id',
   '/areas/:id/goals/new',
@@ -58,7 +59,9 @@ function Screens() {
 
   switch (hit?.pattern) {
     case '/':
-      return <TodayScreen />
+      return <TasksScreen />
+    case '/tasks/:id':
+      return <TaskScreen taskId={Number(hit.params['id'])} />
     case '/star':
       return <StarScreen />
     case '/areas/:id':
@@ -81,7 +84,7 @@ function Screens() {
       return (
         <div className="screen">
           <p className="empty">
-            Nothing here. <Link to="/">Back to today</Link>
+            Nothing here. <Link to="/">Back to your tasks</Link>
           </p>
         </div>
       )
@@ -96,7 +99,7 @@ function TabBar() {
           <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6">
             <path d="M3.5 5.5h13M3.5 10h13M3.5 14.5h8" strokeLinecap="round" />
           </svg>
-          Today
+          Tasks
         </Link>
         <Link to="/star" className="tab">
           <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6">

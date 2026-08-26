@@ -91,7 +91,7 @@ export function DayScreen({ date }: { date: string }) {
           {view.items.map((item) => {
             const cls =
               item.status === 'done' ? ' is-done' : item.status === 'skipped' ? ' is-skipped' : ''
-            const action = index.subgoalById.get(item.subgoal_id)
+            const task = index.subgoalById.get(item.subgoal_id)
             return (
               <div key={item.subgoal_id} className={`row${cls}`}>
                 <Stripe importance={item.importance} />
@@ -106,9 +106,13 @@ export function DayScreen({ date }: { date: string }) {
                   <div className="row-title">{item.title}</div>
                   <div className="row-meta">
                     <ImportanceDot importance={item.importance} />
-                    <Link to={`/goals/${item.goal_id}`}>{item.goalTitle}</Link>
-                    <span>·</span>
-                    <span>{item.areaName}</span>
+                    {item.goal_id != null ? (
+                      <>
+                        <Link to={`/goals/${item.goal_id}`}>{item.goalTitle}</Link>
+                        <span>·</span>
+                      </>
+                    ) : null}
+                    <Link to={`/areas/${item.area_id}`}>{item.areaName}</Link>
                     <span>·</span>
                     <span className="num">weight {item.weight}</span>
                     {!item.wasDue ? (
@@ -119,7 +123,7 @@ export function DayScreen({ date }: { date: string }) {
                         </span>
                       </>
                     ) : null}
-                    {action?.cadence_type === 'once' && item.wasDue && item.status == null ? (
+                    {task?.cadence_type === 'once' && item.wasDue && item.status == null ? (
                       <>
                         <span>·</span>
                         <span className="overdue-tag">deadline passed</span>

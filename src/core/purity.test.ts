@@ -22,6 +22,7 @@ describe('src/core imports nothing', () => {
   it('has source files to check', () => {
     expect(sourceFiles.sort()).toEqual([
       'index.ts',
+      'repeat.ts',
       'rows.ts',
       'score.ts',
       'state.ts',

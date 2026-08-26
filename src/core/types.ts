@@ -10,10 +10,13 @@
 /** A local-time calendar day, `YYYY-MM-DD`. Compared lexicographically (§2). */
 export type ISODate = string
 
+/** A local wall-clock time, `HH:MM`, 24-hour. Never carries a date or a zone. */
+export type ClockTime = string
+
 /** Monday-first, zero-indexed: 0 = Monday … 6 = Sunday (§2). */
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
-export type CadenceType = 'weekly' | 'monthly' | 'quarterly' | 'once'
+export type CadenceType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'once'
 export type Importance = 'high' | 'medium' | 'low'
 export type GoalStatus = 'active' | 'frozen'
 export type CheckinStatus = 'done' | 'skipped'
@@ -33,24 +36,43 @@ export interface Area extends SyncMeta {
   position: number
 }
 
+/**
+ * A goal is a heading, not a weight.
+ *
+ * Priority lives on the task (§3, §5): two tasks under one goal are rarely
+ * equally urgent, and a goal-level weight forced them to be. A goal groups
+ * tasks inside an area, and can be frozen — that is all it does.
+ */
 export interface Goal extends SyncMeta {
   id: number
   area_id: number
   title: string
   description: string
-  /** `frozen` goals leave scoring entirely (§5). */
+  /** `frozen` goals leave scoring entirely, taking their tasks with them (§5). */
   status: GoalStatus
-  importance: Importance
   /** Nothing is scheduled before this date. */
   created_at: ISODate
 }
 
-/** A recurring action — the only thing that ever gets ticked. */
+/**
+ * A task — the only thing that ever gets ticked.
+ *
+ * Stored as `subgoals` for continuity with §3's table names. A task always
+ * belongs to an **area**; a goal is optional, so a task can sit directly in
+ * Health without inventing a goal to hang it on.
+ */
 export interface Subgoal extends SyncMeta {
   id: number
-  goal_id: number
+  /** → areas.id. Required: every task scores against exactly one area. */
+  area_id: number
+  /** → goals.id, or null for a task attached straight to its area. */
+  goal_id: number | null
   title: string
+  /** Sets the weight of every occurrence unless `weight` overrides it (§5). */
+  importance: Importance
   cadence_type: CadenceType
+  /** Every `interval` units of the cadence. 1 for everything but a custom repeat. */
+  interval: number
   /** Weekly only. Monday-first weekday numbers, e.g. `[0,2,5]`. */
   days: number[]
   /** Monthly/quarterly fixed-date mode. Held to 1–28 on write *and* read. */
@@ -61,12 +83,21 @@ export interface Subgoal extends SyncMeta {
   month_ordinal: number | null
   /** One-time only, and optional even then. */
   due_date: ISODate | null
-  /** Overrides the goal's importance weight for this action alone. */
+  /** Recurring only: the first day it can come due, and the interval's anchor. */
+  start_date: ISODate | null
+  /** Recurring only: the last day it can come due. **Inclusive.** */
+  repeat_until: ISODate | null
+  /** Optional time of day, `HH:MM`. Display only — scoring is per day (§2). */
+  time: ClockTime | null
+  /** Overrides the importance weight for this task alone. */
   weight: number | null
   created_at: ISODate
-  /** Archived actions leave the interface; their history stays meaningful. */
+  /** Archived tasks leave the interface; their history stays meaningful. */
   archived: boolean
 }
+
+/** The task is the unit of work; `Task` is the name the UI uses for it. */
+export type Task = Subgoal
 
 /**
  * `(subgoal_id, date)` is the real key. **No row means unresolved**, which is

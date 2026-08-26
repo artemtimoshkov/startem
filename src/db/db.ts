@@ -39,6 +39,53 @@ export class StartemDB extends Dexie {
       freezes: 'id, goal_id',
       meta: 'key',
     })
+
+    /**
+     * v2 — priority moved from the goal to the task, and a task gained an
+     * area of its own so it can exist without a goal (§3).
+     *
+     * The upgrade has to hand each goal's importance down before it is
+     * dropped: doing it later, from a row that no longer carries the column,
+     * would silently reset every task on the device to `medium` and re-weight
+     * the whole star.
+     */
+    this.version(2)
+      .stores({
+        areas: 'id, position',
+        goals: 'id, area_id, status, deleted',
+        subgoals: 'id, area_id, goal_id, archived, deleted',
+        checkins: '[subgoal_id+date], subgoal_id, date',
+        freezes: 'id, goal_id',
+        meta: 'key',
+      })
+      .upgrade(async (tx) => {
+        const goals = await tx.table('goals').toArray()
+        const byId = new Map<number, { area_id: number; importance?: string }>(
+          goals.map((g: Record<string, unknown>) => [
+            g['id'] as number,
+            { area_id: g['area_id'] as number, importance: g['importance'] as string | undefined },
+          ]),
+        )
+        await tx
+          .table('subgoals')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            const parent = byId.get(row['goal_id'] as number)
+            row['area_id'] = row['area_id'] ?? parent?.area_id ?? 0
+            row['importance'] = row['importance'] ?? parent?.importance ?? 'medium'
+            row['interval'] = row['interval'] ?? 1
+            row['start_date'] = row['start_date'] ?? null
+            row['repeat_until'] = row['repeat_until'] ?? null
+            row['time'] = row['time'] ?? null
+            if (row['goal_id'] === 0 || row['goal_id'] === undefined) row['goal_id'] = null
+          })
+        await tx
+          .table('goals')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            delete row['importance']
+          })
+      })
   }
 }
 

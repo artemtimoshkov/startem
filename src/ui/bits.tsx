@@ -1,6 +1,6 @@
 /** Small shared pieces. Accessibility rules from SPEC.md §8 live here. */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { CheckinStatus, Importance } from '../core'
 import { Link, back } from './router'
@@ -259,34 +259,147 @@ export function formatDate(date: string, opts: Intl.DateTimeFormatOptions = {}):
 export const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 export const WEEKDAY_INITIALS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 
-/** Describes a cadence in words, for the row meta line. */
-export function cadenceLabel(action: {
-  cadence_type: string
-  days: number[]
-  monthly_day: number | null
-  month_weekday: number | null
-  month_ordinal: number | null
-  due_date: string | null
-}): string {
-  const ordinals: Record<number, string> = { 1: '1st', 2: '2nd', 3: '3rd', 4: '4th', [-1]: 'last' }
-  switch (action.cadence_type) {
-    case 'weekly': {
-      if (action.days.length === 7) return 'Every day'
-      if (action.days.length === 0) return 'No days set'
-      return action.days.map((d) => WEEKDAY_LABELS[d]).join(', ')
-    }
-    case 'monthly':
-    case 'quarterly': {
-      const period = action.cadence_type === 'monthly' ? 'Monthly' : 'Quarterly'
-      if (action.month_weekday != null) {
-        const ord = ordinals[action.month_ordinal ?? -1] ?? 'last'
-        return `${period}, ${ord} ${WEEKDAY_LABELS[action.month_weekday]}`
+/** The priority flag, the way the composer and the rows both show it. */
+export function Flag({ size = 13 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden="true">
+      <path d="M4 2v12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M4.9 2.6h7l-1.6 2.7 1.6 2.7h-7z" fill="currentColor" />
+    </svg>
+  )
+}
+
+export function Plus({ size = 18 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 20 20" width={size} height={size} aria-hidden="true">
+      <path
+        d="M10 4.5v11M4.5 10h11"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+/** `P1` / `P2` / `P3`, in the order a person ranks things. */
+export const PRIORITY_LABEL: Record<Importance, string> = {
+  high: 'P1',
+  medium: 'P2',
+  low: 'P3',
+}
+
+export const PRIORITY_NAME: Record<Importance, string> = {
+  high: 'P1 · High',
+  medium: 'P2 · Medium',
+  low: 'P3 · Low',
+}
+
+export const PRIORITIES: Importance[] = ['high', 'medium', 'low']
+
+/**
+ * A bottom sheet: the app's one overlay.
+ *
+ * Every picker in the composer is one of these rather than a native dialog —
+ * `alert` and `confirm` are blocking, unstyleable, and read as browser
+ * artefacts rather than as part of the app (§7, §8). Escape and a tap on the
+ * backdrop both close it, and focus moves into the panel so a keyboard can
+ * reach the options.
+ */
+export function Sheet({
+  title,
+  onClose,
+  children,
+  footer,
+  onBack,
+}: {
+  title: string
+  onClose: () => void
+  children: ReactNode
+  footer?: ReactNode
+  onBack?: () => void
+}) {
+  const panel = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
       }
-      return `${period}, day ${action.monthly_day ?? '—'}`
     }
-    case 'once':
-      return action.due_date ? `Once, by ${formatDate(action.due_date)}` : 'Once, no deadline'
-    default:
-      return ''
-  }
+    window.addEventListener('keydown', onKey)
+    panel.current?.focus()
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div className="sheet-scrim" onClick={onClose} role="presentation">
+      <div
+        className="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        ref={panel}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sheet-head">
+          {onBack ? (
+            <button type="button" className="sheet-back" aria-label="Back" onClick={onBack}>
+              <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+                <path
+                  d="M10 3.5L5 8l5 4.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          ) : null}
+          <span className="sheet-title">{title}</span>
+          <span className="spacer" />
+          <button type="button" className="sheet-close" aria-label="Close" onClick={onClose}>
+            <Cross size={14} />
+          </button>
+        </div>
+        <div className="sheet-body">{children}</div>
+        {footer ? <div className="sheet-foot">{footer}</div> : null}
+      </div>
+    </div>
+  )
+}
+
+/** One tappable line inside a sheet. */
+export function SheetRow({
+  icon,
+  label,
+  hint,
+  selected,
+  onClick,
+  danger,
+}: {
+  icon?: ReactNode
+  label: ReactNode
+  hint?: ReactNode
+  selected?: boolean
+  onClick: () => void
+  danger?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      className={`sheet-row${selected ? ' is-selected' : ''}${danger ? ' is-danger' : ''}`}
+      aria-pressed={selected}
+      onClick={onClick}
+    >
+      {icon ? <span className="sheet-row-icon">{icon}</span> : null}
+      <span className="sheet-row-label">{label}</span>
+      {hint ? <span className="sheet-row-hint">{hint}</span> : null}
+      {selected ? <Tick size={13} /> : null}
+    </button>
+  )
 }
