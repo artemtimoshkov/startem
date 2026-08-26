@@ -12,6 +12,7 @@ import {
   cadenceLabel,
   formatDate,
 } from './bits'
+import { InstallCard } from './install'
 import { Link } from './router'
 
 export function TodayScreen() {
@@ -70,6 +71,8 @@ export function TodayScreen() {
           <Link to="/star">See where you stand →</Link>
         </p>
       ) : null}
+
+      <InstallCard />
     </div>
   )
 }

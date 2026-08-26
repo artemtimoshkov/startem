@@ -11,15 +11,42 @@ import type { ReactNode } from 'react'
 
 const PathContext = createContext<string>('/')
 
+/**
+ * Path routing is the production shape: §11's `vercel.json` rewrite exists so
+ * that a refresh on `/goals/12` still serves the app.
+ *
+ * Where the app is *not* served from the origin root — a preview host, an
+ * embed, a subdirectory — pushing `/goals/12` would navigate out of the app
+ * entirely, so the route rides in the hash instead. That is a property of where
+ * the build is deployed, not something to sniff at runtime: guessing from
+ * `location.pathname` gets it exactly backwards on a genuine deep link, which
+ * arrives at `/goals/12` precisely *because* the rewrite worked.
+ *
+ * Set `VITE_HASH_ROUTER=1` at build time for those hosts.
+ */
+const USE_HASH = import.meta.env['VITE_HASH_ROUTER'] === '1'
+
+function readPath(): string {
+  if (USE_HASH) return window.location.hash.replace(/^#/, '') || '/'
+  return window.location.pathname || '/'
+}
+
+/** The href a link needs, which differs between the two modes. */
+export function href(to: string): string {
+  return USE_HASH ? `#${to}` : to
+}
+
 export function RouterProvider({ children }: { children: ReactNode }) {
-  const [path, setPath] = useState(() => window.location.pathname || '/')
+  const [path, setPath] = useState(readPath)
 
   useEffect(() => {
-    const onPop = () => setPath(window.location.pathname || '/')
+    const onPop = () => setPath(readPath())
     window.addEventListener('popstate', onPop)
+    window.addEventListener('hashchange', onPop)
     window.addEventListener('startem:navigate', onPop)
     return () => {
       window.removeEventListener('popstate', onPop)
+      window.removeEventListener('hashchange', onPop)
       window.removeEventListener('startem:navigate', onPop)
     }
   }, [])
@@ -32,9 +59,16 @@ export function usePath(): string {
 }
 
 export function navigate(to: string, replace = false): void {
-  if (to === window.location.pathname) return
-  if (replace) window.history.replaceState(null, '', to)
-  else window.history.pushState(null, '', to)
+  if (to === readPath()) return
+  if (USE_HASH) {
+    // Assigning the hash pushes a history entry; replaceState keeps Back sane.
+    if (replace) window.history.replaceState(null, '', `#${to}`)
+    else window.location.hash = to
+  } else if (replace) {
+    window.history.replaceState(null, '', to)
+  } else {
+    window.history.pushState(null, '', to)
+  }
   window.dispatchEvent(new Event('startem:navigate'))
   window.scrollTo(0, 0)
 }
@@ -56,7 +90,7 @@ export function Link({
   const path = usePath()
   return (
     <a
-      href={to}
+      href={href(to)}
       className={className}
       aria-current={path === to ? 'page' : undefined}
       onClick={(e) => {

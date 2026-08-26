@@ -40,6 +40,13 @@ html, body, #root {
   min-height: 100dvh;
 }
 
+/* The ground is painted on the root as well as the body: iOS rubber-band
+   overscroll exposes the html element, and an unpainted one flashes the host's
+   colour on the way past. */
+html {
+  background: var(--bg);
+}
+
 body {
   background: var(--bg);
   color: var(--text);

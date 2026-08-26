@@ -8,7 +8,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { buildIndex, buildToday, isFrozenOn } from '../core'
-import { db } from './db'
+import { DEVICE_KEY_META, db } from './db'
 import {
   deleteGoal,
   ensureSeeded,
@@ -383,5 +383,66 @@ describe('the migration import', () => {
     const idx = buildIndex(await loadSnapshot(), TODAY)
     expect(idx.goalById.get(41)?.title).toBe('Ship v2')
     expect(idx.subgoalsByGoal.get(41)?.map((s) => s.id)).toEqual([108])
+  })
+})
+
+describe('id allocation', () => {
+  beforeEach(ensureSeeded)
+
+  const mint = () =>
+    saveGoal({ area_id: 1, title: 'g', description: '', importance: 'low', actions: [] }, TODAY)
+
+  it('never repeats an id on one device', async () => {
+    const ids = new Set<number>()
+    for (let i = 0; i < 40; i++) ids.add(await mint())
+    expect(ids.size).toBe(40)
+  })
+
+  it('carries a stable device key in the high bits of every id', async () => {
+    const a = await mint()
+    const b = await mint()
+    const SPACE = 2 ** 20
+    expect(Math.floor(a / SPACE)).toBe(Math.floor(b / SPACE))
+    expect(Math.floor(a / SPACE)).toBeGreaterThanOrEqual(1)
+    expect((await db.meta.get(DEVICE_KEY_META))?.value).toBe(Math.floor(a / SPACE))
+  })
+
+  it('stays exact in a JS number and inside a Postgres bigint', async () => {
+    const id = await mint()
+    expect(Number.isSafeInteger(id)).toBe(true)
+    expect(id).toBeLessThan(2 ** 40)
+  })
+
+  it('gives two devices disjoint id ranges', async () => {
+    // Two installs = two device keys. Simulate the second by swapping the key.
+    const first = await mint()
+    const firstKey = Math.floor(first / 2 ** 20)
+    await db.meta.put({ key: DEVICE_KEY_META, value: firstKey === 1 ? 2 : firstKey - 1 })
+    await db.meta.delete('id_counter')
+    const second = await mint()
+    expect(Math.floor(second / 2 ** 20)).not.toBe(firstKey)
+    expect(second).not.toBe(first)
+  })
+
+  it('does not re-mint ids that an import brought back from this device', async () => {
+    const goalId = await mint()
+    const dumped = await exportSnapshot()
+    await importSnapshot(dumped, TODAY)
+    const next = await mint()
+    expect(next).not.toBe(goalId)
+    expect(await db.goals.get(goalId)).toBeDefined()
+  })
+
+  it('leaves small imported ids alone — device keys start at 1', async () => {
+    await importSnapshot(
+      { areas: [{ id: 3, name: 'Work', position: 2 }], goals: [{ id: 41, area_id: 3, title: 'x' }] },
+      TODAY,
+    )
+    const minted = await saveGoal(
+      { area_id: 3, title: 'new', description: '', importance: 'low', actions: [] },
+      TODAY,
+    )
+    expect(minted).toBeGreaterThan(2 ** 20)
+    expect(await db.goals.get(41)).toBeDefined()
   })
 })

@@ -12,13 +12,22 @@ import type { ReactNode } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { buildIndex, todayISO, type Index, type Snapshot } from '../core'
 import { db, requestPersistence } from '../db/db'
-import { ensureSeeded, loadSnapshot } from '../db/repo'
+import { ensureSeeded, importSample, loadSnapshot } from '../db/repo'
+
+/**
+ * Preview builds (`VITE_SEED_SAMPLE=1`) load the sample dataset on a store that
+ * has nothing in it, so a demo opens on a populated star rather than an empty
+ * list. Off by default: a real install starts empty, on purpose.
+ */
+const SEED_SAMPLE = import.meta.env['VITE_SEED_SAMPLE'] === '1'
 
 interface DataValue {
   snapshot: Snapshot | undefined
   index: Index | undefined
   today: string
   loading: boolean
+  /** Set when the device store is unusable — see the note in DataProvider. */
+  storageError: string | null
 }
 
 const DataContext = createContext<DataValue>({
@@ -26,6 +35,7 @@ const DataContext = createContext<DataValue>({
   index: undefined,
   today: todayISO(),
   loading: true,
+  storageError: null,
 })
 
 /** Recomputed at midnight so an app left open overnight rolls over. */
@@ -48,12 +58,26 @@ function useToday(): string {
 export function DataProvider({ children }: { children: ReactNode }) {
   const today = useToday()
   const [ready, setReady] = useState(false)
+  const [storageError, setStorageError] = useState<string | null>(null)
 
   useEffect(() => {
     void (async () => {
-      await ensureSeeded()
-      void requestPersistence()
-      setReady(true)
+      try {
+        await ensureSeeded()
+        if (SEED_SAMPLE && (await db.goals.count()) === 0) await importSample(todayISO())
+        void requestPersistence()
+        setReady(true)
+      } catch (e) {
+        // The whole app is the device store, so a blocked IndexedDB is not a
+        // degraded mode — it is fatal, and it has to say so rather than sitting
+        // on "Loading…" forever. Safari's private browsing and "block all
+        // cookies" both do this.
+        setStorageError(
+          e instanceof Error && e.message
+            ? e.message
+            : 'This browser will not let the app store data on the device.',
+        )
+      }
     })()
   }, [])
 
@@ -69,8 +93,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo<DataValue>(
-    () => ({ snapshot, index, today, loading: !snapshot }),
-    [snapshot, index, today],
+    () => ({ snapshot, index, today, loading: !snapshot && !storageError, storageError }),
+    [snapshot, index, today, storageError],
   )
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>

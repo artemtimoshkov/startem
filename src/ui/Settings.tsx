@@ -1,15 +1,23 @@
 /** Areas, and the migration import / export (SPEC.md §7, and the migration note). */
 
 import { useRef, useState } from 'react'
-import { exportSnapshot, importSnapshot, renameArea, type ImportResult } from '../db/repo'
+import {
+  exportSnapshot,
+  importSample,
+  importSnapshot,
+  renameArea,
+  type ImportResult,
+} from '../db/repo'
 import { useSnapshot } from './DataContext'
 import { InlineConfirm, Toast, TopBar, useToast } from './bits'
+import { InstallSection } from './install'
 
 export function SettingsScreen() {
   const { index, snapshot, today } = useSnapshot()
   const toast = useToast()
   const fileRef = useRef<HTMLInputElement>(null)
   const [pending, setPending] = useState<{ name: string; raw: unknown } | null>(null)
+  const [sampling, setSampling] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ImportResult | null>(null)
 
@@ -60,6 +68,8 @@ export function SettingsScreen() {
   return (
     <div className="screen">
       <TopBar title="Settings" />
+
+      <InstallSection />
 
       <p className="section-label">Areas</p>
       <div className="card">
@@ -125,6 +135,9 @@ export function SettingsScreen() {
           <button type="button" className="btn" onClick={download}>
             Export JSON
           </button>
+          <button type="button" className="btn btn-quiet" onClick={() => setSampling(true)}>
+            Load sample data
+          </button>
         </div>
         <input
           ref={fileRef}
@@ -155,6 +168,27 @@ export function SettingsScreen() {
               confirmLabel="Replace my data"
               onConfirm={runImport}
               onCancel={() => setPending(null)}
+            />
+          </div>
+        ) : null}
+
+        {sampling ? (
+          <div style={{ marginTop: 12 }}>
+            <InlineConfirm
+              question="Load the sample dataset? This replaces everything currently on this device."
+              confirmLabel="Load the sample"
+              onConfirm={() => {
+                setSampling(false)
+                void importSample(today)
+                  .then((r) => {
+                    setResult(r)
+                    toast.show('Sample data loaded')
+                  })
+                  .catch((e: unknown) =>
+                    setError(e instanceof Error ? e.message : 'Could not load the sample.'),
+                  )
+              }}
+              onCancel={() => setSampling(false)}
             />
           </div>
         ) : null}

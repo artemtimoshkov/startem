@@ -89,10 +89,13 @@ export function AreaScreen({ areaId }: { areaId: number }) {
         sub={vertex ? `${vertex.label} / 10` : undefined}
         backTo="/star"
         right={
-          <a className="btn btn-sm" href={`/goals/new?area=${areaId}`}
-             onClick={(e) => { e.preventDefault(); navigate(`/goals/new?area=${areaId}`) }}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => navigate(`/areas/${areaId}/goals/new`)}
+          >
             New goal
-          </a>
+          </button>
         }
       />
 

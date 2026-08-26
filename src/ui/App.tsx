@@ -8,11 +8,13 @@ import { AreaScreen, StarScreen } from './Star'
 import { GoalEditorScreen, GoalScreen } from './Goal'
 import { CalendarScreen, DayScreen } from './Calendar'
 import { SettingsScreen } from './Settings'
+import { ServiceWorkerNotice } from './serviceWorker'
 
 const ROUTES = [
   '/',
   '/star',
   '/areas/:id',
+  '/areas/:id/goals/new',
   '/goals/new',
   '/goals/:id',
   '/goals/:id/edit',
@@ -22,8 +24,29 @@ const ROUTES = [
 ]
 
 function Screens() {
-  const { loading } = useData()
+  const { loading, storageError } = useData()
   const hit = useMatch(ROUTES)
+
+  if (storageError) {
+    return (
+      <div className="screen">
+        <div className="card card-pad">
+          <h1 style={{ fontSize: 18, margin: '0 0 8px' }}>No room to store anything</h1>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: '0 0 8px' }}>
+            Startem keeps all of your data on the device, so it cannot run without somewhere to
+            put it. This browser is refusing.
+          </p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: 0 }}>
+            Private browsing and “block all cookies” are the usual causes. A normal window, or
+            installing the app to the home screen, will fix it.
+          </p>
+          <p style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 0 }}>
+            {storageError}
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   if (loading) {
     return (
@@ -42,6 +65,8 @@ function Screens() {
       return <AreaScreen areaId={Number(hit.params['id'])} />
     case '/goals/new':
       return <GoalEditorScreen goalId={null} />
+    case '/areas/:id/goals/new':
+      return <GoalEditorScreen goalId={null} presetAreaId={Number(hit.params['id'])} />
     case '/goals/:id':
       return <GoalScreen goalId={Number(hit.params['id'])} />
     case '/goals/:id/edit':
@@ -109,6 +134,7 @@ export default function App() {
           <Screens />
         </div>
         <TabBar />
+        <ServiceWorkerNotice />
       </DataProvider>
     </RouterProvider>
   )
