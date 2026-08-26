@@ -1,4 +1,4 @@
-# Startem Build Spec — v2, 25 August 2026
+# Startem Build Spec — v2.1, 26 August 2026
 
 Everything needed to rebuild the app from nothing: every field, every scheduling rule, the scoring maths, the mistakes already paid for once — and the decided stack it ships on.
 
@@ -149,13 +149,31 @@ monthPattern(action, date):
   return ceil(dayOfMonth(date) / 7) == ordinal
 ```
 
+If neither mode is configured — `month_weekday` and `monthly_day` both null — the action never comes due. Normalisation keeps the two modes mutually exclusive on write, so a stored row cannot reach that state.
+
 The "last" test: a date is the last of its weekday in the month exactly when seven days later lands in a different month. And `ceil(day / 7)` gives the ordinal because the 1st–7th always hold the first of every weekday, the 8th–14th the second, and so on.
 
 > **Why fixed days stop at 28:** Days 29–31 don't exist in every month. An action on "day 31" would silently never come due in February, April, June, September or November — no error, just five months a year where a commitment quietly vanishes. So fixed days are clamped to 1–28 *both* on write and on read, and **"last Friday" is the only correct way to express genuine month-end.**
 
 ### One-time actions
 
-They never recur. A one-time action is a win once completed, a standing miss once its deadline passes, and simply not yet owed before then. With no `due_date` it sits in the list indefinitely until done, and never counts against anything.
+They never recur — `isScheduled` is false for them on every date. A one-time action is a win once completed, a standing miss once its deadline passes, and simply not yet owed before then. With no `due_date` it sits in the list indefinitely until done, and never counts against anything.
+
+They do still score, though, so ticking one moves the calendar and the star. Since they have no cadence to walk, each gets **exactly one occurrence, on one effective date**:
+
+```
+onceOccurrence(action, today):
+  if logged (a check-in exists)   -> { date: the check-in's date, resolved }
+  if due_date != null AND due_date < today
+                                  -> { date: due_date, unresolved }   // standing miss
+  otherwise                       -> none    // due today is pending; no deadline never counts
+```
+
+Credit lands on the day the work actually happened rather than on the deadline, because that is the day the calendar is a record of. The occurrence is then windowed like every other one, so a win ages out of the star after 28 days instead of propping it up forever — and an overdue one stops dragging after 28 days too, while remaining in the todo list until it is done or archived.
+
+> **Why the effective date and not the deadline:** a one-time action with no `due_date` has no other date to attach to, and the spec still wants it to count as a win once done. Keying the occurrence to the check-in covers both cases with one rule.
+
+
 
 ## 5. Scoring
 
@@ -187,16 +205,18 @@ Over 28 days every weekday falls *exactly* four times. Over 30 days, two weekday
 
 So `skipped` and a past unlogged day behave identically in the maths — both are misses. The difference is only that crossing out registers immediately rather than waiting for midnight.
 
+One-time actions have no days to walk, so their single occurrence (§4) is counted directly: it contributes if its effective date falls inside the range being scored.
+
 ### Rare cadences need two different readings
 
 A 28-day window can miss a monthly action's date entirely (a 28-day span inside a 31-day month may contain no 1st). Left alone, a monthly commitment would drop out of the score at random. So:
 
 | Mode | Rule | Used by |
 |---|---|---|
-| standing | The action's *most recent* due instance represents it, found by scanning back day by day until the first hit. | The star, goal percentages |
+| standing | The action's *most recent* due instance represents it, found by scanning back day by day until the first hit. An unresolved **today** is skipped and the scan continues, so last month's result stands in until today is logged rather than the action dropping out for a day. | The star, goal percentages |
 | range | Only what genuinely came due inside the range. | Weekly history, calendar days |
 
-Look-backs for standing mode: **45 days** monthly, **115 days** quarterly. Consecutive "last Sunday" dates can sit 35 days apart and quarterly ones about 97, so the reach must exceed that comfortably. Scanning further is harmless — the scan stops at the first match, which is by definition the latest one.
+Weekly actions, and the single occurrence of a one-time one, need none of this — they read the plain 28-day window. Look-backs for standing mode: **45 days** monthly, **115 days** quarterly. Consecutive "last Sunday" dates can sit 35 days apart and quarterly ones about 97, so the reach must exceed that comfortably. Scanning further is harmless — the scan stops at the first match, which is by definition the latest one.
 
 ### The formula
 
@@ -264,7 +284,7 @@ Hovering a day shows tasks completed and the weighted amount. Clicking opens tha
 
 > **One deliberate inconsistency:** A day cell's `ratio` counts *all* weight due, including today's unresolved items — so today reads as progress so far. The star excludes unresolved items instead. Both are right for their purpose: a calendar is a record of a day, the star is a judgement about a standing. Don't "fix" one to match the other.
 
-The day detail view includes pending items — it's a checklist, so it must show what was owed as well as what was logged. For **today** it also includes pending one-time actions so it matches the Today list exactly; for a **past** day it does not, because a task due next week was not owed back then.
+The day detail view includes pending items — it's a checklist, so it must show what was owed as well as what was logged. For **today** it also includes pending one-time actions so it matches the Today list exactly; for a **past** day it does not, because a task due next week was not owed back then — with one exception: a one-time action whose own occurrence lands on that day (it was logged then, or that day was the deadline it blew past) *was* owed then, and shows.
 
 ## 7. What the user can do
 
