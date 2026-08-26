@@ -1,4 +1,4 @@
-# Startem Build Spec — v2.2, 26 August 2026
+# Startem Build Spec — v2.3, 26 August 2026
 
 Everything needed to rebuild the app from nothing: every field, every scheduling rule, the scoring maths, the mistakes already paid for once — and the decided stack it ships on.
 
@@ -453,12 +453,24 @@ startem/
     sync/          # outbox, push/pull loop, session handling
     ui/            # React: Today, Star, Calendar, Goal editor
   public/          # icons 180/192/512 + maskable (all PNG)
+  scripts/         # make-icons.mjs — rasterises the icons, so the PNGs
+                   # are generated from one definition rather than hand-made
+  e2e/             # browser checks: the offline boot, the SPA rewrite, the
+                   # store's real behaviour — none of which unit tests can see
+  migration/       # sample-export.json: the documented import shape
   supabase/
     migrations/    # cloud schema + RLS policies, checked in
   index.html
   vite.config.ts   # includes vite-plugin-pwa
   vercel.json      # SPA rewrite: all routes -> /index.html
 ```
+
+Vercel checks the filesystem *before* applying rewrites, so a blanket
+`/(.*) → /index.html` still serves real files — `sw.js`, the manifest, the
+icons, everything under `/assets` — and only unmatched routes fall through to
+the shell. `assets/*` is immutable for a year (the filenames are hashed);
+`sw.js` and the manifest must be `max-age=0`, or a stale worker keeps serving a
+bundle that has already been replaced.
 
 No monorepo, no workspaces — one `package.json`, one install, one build. The §12 monorepo trap cannot recur if there is no monorepo.
 

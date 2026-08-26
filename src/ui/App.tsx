@@ -8,6 +8,7 @@ import { AreaScreen, StarScreen } from './Star'
 import { GoalEditorScreen, GoalScreen } from './Goal'
 import { CalendarScreen, DayScreen } from './Calendar'
 import { SettingsScreen } from './Settings'
+import { ServiceWorkerNotice } from './serviceWorker'
 
 const ROUTES = [
   '/',
@@ -133,6 +134,7 @@ export default function App() {
           <Screens />
         </div>
         <TabBar />
+        <ServiceWorkerNotice />
       </DataProvider>
     </RouterProvider>
   )

@@ -22,6 +22,7 @@ import {
   normaliseSubgoal,
   todayISO,
 } from '../core'
+import sampleExport from '../../migration/sample-export.json'
 import { db, newId, reserveIds } from './db'
 
 /** Set on every write, so §10's last-write-wins has something to order by. */
@@ -383,8 +384,7 @@ export async function exportSnapshot(): Promise<Snapshot> {
  * shape the real migration has to match.
  */
 export async function importSample(today = todayISO()): Promise<ImportResult> {
-  const sample: unknown = (await import('../../migration/sample-export.json')).default
-  return importSnapshot(sample, today)
+  return importSnapshot(sampleExport, today)
 }
 
 export type { Area, Freeze }

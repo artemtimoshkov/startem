@@ -10,6 +10,7 @@ import {
 } from '../db/repo'
 import { useSnapshot } from './DataContext'
 import { InlineConfirm, Toast, TopBar, useToast } from './bits'
+import { InstallSection } from './install'
 
 export function SettingsScreen() {
   const { index, snapshot, today } = useSnapshot()
@@ -67,6 +68,8 @@ export function SettingsScreen() {
   return (
     <div className="screen">
       <TopBar title="Settings" />
+
+      <InstallSection />
 
       <p className="section-label">Areas</p>
       <div className="card">
