@@ -10,19 +10,46 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { buildIndex, buildToday, isFrozenOn } from '../core'
 import { DEVICE_KEY_META, db } from './db'
 import {
+  archiveTask,
+  createGoal,
   deleteGoal,
   ensureSeeded,
   exportSnapshot,
   freezeGoal,
   importSnapshot,
   loadSnapshot,
+  moveTask,
   renameArea,
   saveGoal,
+  saveTask,
   setCheckin,
   toggleDone,
   toggleSkipped,
   unfreezeGoal,
+  type TaskDraft,
 } from './repo'
+
+/** A task draft with everything filled in, so each test states only its point. */
+function draft(over: Partial<TaskDraft> = {}): TaskDraft {
+  return {
+    area_id: 1,
+    goal_id: null,
+    title: 'Gym session',
+    importance: 'medium',
+    cadence_type: 'weekly',
+    interval: 1,
+    days: [2],
+    monthly_day: null,
+    month_weekday: null,
+    month_ordinal: null,
+    due_date: null,
+    start_date: null,
+    repeat_until: null,
+    time: null,
+    weight: null,
+    ...over,
+  }
+}
 
 const TODAY = '2026-08-26' // a Wednesday
 
@@ -93,116 +120,113 @@ describe('check-ins', () => {
 describe('saving a goal', () => {
   beforeEach(ensureSeeded)
 
-  it('creates the goal and its actions in one go', async () => {
+  it('creates a heading — an area, a title, some prose, and nothing else', async () => {
     const id = await saveGoal(
-      {
-        area_id: 1,
-        title: 'Reach 100 kg bench press',
-        description: 'Progressive overload.',
-        importance: 'high',
-        actions: [
-          {
-            title: 'Gym session',
-            cadence_type: 'weekly',
-            days: [0, 2, 5],
-            monthly_day: null,
-            month_weekday: null,
-            month_ordinal: null,
-            due_date: null,
-            weight: null,
-          },
-        ],
-      },
+      { area_id: 1, title: '  Reach 100 kg bench press ', description: 'Progressive overload.' },
       TODAY,
     )
     const goal = await db.goals.get(id)
     expect(goal?.title).toBe('Reach 100 kg bench press')
     expect(goal?.status).toBe('active')
     expect(goal?.created_at).toBe(TODAY)
-    const actions = await db.subgoals.where('goal_id').equals(id).toArray()
-    expect(actions).toHaveLength(1)
-    expect(actions[0]!.days).toEqual([0, 2, 5])
-  })
-
-  it('clamps a fixed monthly day to 28 on write', async () => {
-    const id = await saveGoal(
-      {
-        area_id: 1,
-        title: 'Finances',
-        description: '',
-        importance: 'low',
-        actions: [
-          {
-            title: 'Reconcile',
-            cadence_type: 'monthly',
-            days: [],
-            monthly_day: 31,
-            month_weekday: null,
-            month_ordinal: null,
-            due_date: null,
-            weight: null,
-          },
-        ],
-      },
-      TODAY,
-    )
-    const action = (await db.subgoals.where('goal_id').equals(id).toArray())[0]!
-    expect(action.monthly_day).toBe(28)
-  })
-
-  it('archives a removed action rather than deleting it, keeping its history', async () => {
-    const id = await saveGoal(
-      {
-        area_id: 1,
-        title: 'Fitness',
-        description: '',
-        importance: 'medium',
-        actions: [
-          { title: 'A', cadence_type: 'weekly', days: [2], monthly_day: null, month_weekday: null, month_ordinal: null, due_date: null, weight: null },
-          { title: 'B', cadence_type: 'weekly', days: [2], monthly_day: null, month_weekday: null, month_ordinal: null, due_date: null, weight: null },
-        ],
-      },
-      TODAY,
-    )
-    const [a, b] = await db.subgoals.where('goal_id').equals(id).sortBy('id')
-    await setCheckin(b!.id, '2026-08-19', 'done')
-
-    // Save again with only A listed.
-    await saveGoal(
-      {
-        id,
-        area_id: 1,
-        title: 'Fitness',
-        description: '',
-        importance: 'medium',
-        actions: [{ id: a!.id, title: 'A', cadence_type: 'weekly', days: [2], monthly_day: null, month_weekday: null, month_ordinal: null, due_date: null, weight: null }],
-      },
-      TODAY,
-    )
-
-    const rows = await db.subgoals.where('goal_id').equals(id).sortBy('id')
-    expect(rows).toHaveLength(2) // nothing was removed
-    expect(rows.find((r) => r.id === b!.id)?.archived).toBe(true)
-    expect(rows.find((r) => r.id === b!.id)?.deleted).toBe(false)
-    // Its check-in still exists and still describes a real day.
-    expect(await db.checkins.get([b!.id, '2026-08-19'])).toBeDefined()
+    // Priority is the task's now; a goal must not carry one at all (§3).
+    expect('importance' in (goal as object)).toBe(false)
   })
 
   it('keeps created_at and status when editing an existing goal', async () => {
-    const id = await saveGoal(
-      { area_id: 1, title: 'X', description: '', importance: 'low', actions: [] },
-      '2026-01-01',
-    )
+    const id = await saveGoal({ area_id: 1, title: 'X', description: '' }, '2026-01-01')
     await freezeGoal(id, '2026-06-01')
-    await saveGoal(
-      { id, area_id: 2, title: 'X renamed', description: 'd', importance: 'high', actions: [] },
-      TODAY,
-    )
+    await saveGoal({ id, area_id: 2, title: 'X renamed', description: 'd' }, TODAY)
     const goal = await db.goals.get(id)
     expect(goal?.created_at).toBe('2026-01-01')
     expect(goal?.status).toBe('frozen')
     expect(goal?.area_id).toBe(2)
-    expect(goal?.importance).toBe('high')
+  })
+
+  it('creates one from the composer with a title alone', async () => {
+    const id = await createGoal(2, 'Learn to sail', TODAY)
+    expect(await db.goals.get(id)).toMatchObject({ area_id: 2, title: 'Learn to sail' })
+  })
+})
+
+describe('saving a task', () => {
+  beforeEach(ensureSeeded)
+
+  it('attaches to an area with no goal at all', async () => {
+    const id = await saveTask(draft({ area_id: 3, goal_id: null, title: 'Call the bank' }), TODAY)
+    const task = await db.subgoals.get(id)
+    expect(task).toMatchObject({ area_id: 3, goal_id: null, archived: false })
+    expect(task?.created_at).toBe(TODAY)
+    // It scores against its area even though nothing groups it.
+    expect(buildIndex(await loadSnapshot(), TODAY).subgoalsByArea.get(3)?.map((t) => t.id)).toEqual([id])
+  })
+
+  it('carries its own priority, so two tasks under one goal differ', async () => {
+    const goalId = await createGoal(1, 'Fitness', TODAY)
+    const heavy = await saveTask(draft({ goal_id: goalId, importance: 'high' }), TODAY)
+    const light = await saveTask(draft({ goal_id: goalId, importance: 'low', title: 'Stretch' }), TODAY)
+    expect((await db.subgoals.get(heavy))?.importance).toBe('high')
+    expect((await db.subgoals.get(light))?.importance).toBe('low')
+  })
+
+  it('clamps a fixed monthly day to 28 on write', async () => {
+    const id = await saveTask(
+      draft({ cadence_type: 'monthly', days: [], monthly_day: 31 }),
+      TODAY,
+    )
+    expect((await db.subgoals.get(id))?.monthly_day).toBe(28)
+  })
+
+  it('keeps a custom repeat: every 4 weeks, ending on a date', async () => {
+    const id = await saveTask(
+      draft({
+        cadence_type: 'weekly',
+        interval: 4,
+        days: [3],
+        start_date: '2026-08-27',
+        repeat_until: '2026-12-31',
+      }),
+      TODAY,
+    )
+    expect(await db.subgoals.get(id)).toMatchObject({
+      interval: 4,
+      start_date: '2026-08-27',
+      repeat_until: '2026-12-31',
+    })
+  })
+
+  it('keeps a time of day as a bare HH:MM, never a timestamp', async () => {
+    const id = await saveTask(draft({ time: '07:30' }), TODAY)
+    expect((await db.subgoals.get(id))?.time).toBe('07:30')
+    const junk = await saveTask(draft({ time: 'half seven' as string }), TODAY)
+    expect((await db.subgoals.get(junk))?.time).toBeNull()
+  })
+
+  it('never rewrites created_at on an edit', async () => {
+    const id = await saveTask(draft(), '2026-01-01')
+    await saveTask(draft({ id, title: 'Renamed' }), TODAY)
+    const task = await db.subgoals.get(id)
+    expect(task?.created_at).toBe('2026-01-01')
+    expect(task?.title).toBe('Renamed')
+  })
+
+  it('archives rather than deletes, keeping the check-ins that describe real days', async () => {
+    const id = await saveTask(draft(), '2026-01-01')
+    await setCheckin(id, '2026-08-19', 'done')
+    await archiveTask(id)
+    expect(await db.subgoals.get(id)).toMatchObject({ archived: true, deleted: false })
+    expect(await db.checkins.get([id, '2026-08-19'])).toBeDefined()
+    // Gone from the interface, still in the history.
+    expect(buildIndex(await loadSnapshot(), TODAY).subgoalById.has(id)).toBe(false)
+  })
+
+  it('moves between areas and on and off a goal', async () => {
+    const goalId = await createGoal(2, 'Ship v2', TODAY)
+    const id = await saveTask(draft(), TODAY)
+    await moveTask(id, 2, goalId)
+    expect(await db.subgoals.get(id)).toMatchObject({ area_id: 2, goal_id: goalId })
+    await moveTask(id, 2, null)
+    expect((await db.subgoals.get(id))?.goal_id).toBeNull()
   })
 })
 
@@ -210,18 +234,8 @@ describe('freezing', () => {
   let goalId = 0
   beforeEach(async () => {
     await ensureSeeded()
-    goalId = await saveGoal(
-      {
-        area_id: 1,
-        title: 'Call parents',
-        description: '',
-        importance: 'medium',
-        actions: [
-          { title: 'Sunday call', cadence_type: 'weekly', days: [6], monthly_day: null, month_weekday: null, month_ordinal: null, due_date: null, weight: null },
-        ],
-      },
-      '2026-01-01',
-    )
+    goalId = await saveGoal({ area_id: 1, title: 'Call parents', description: '' }, '2026-01-01')
+    await saveTask(draft({ goal_id: goalId, title: 'Sunday call', days: [6] }), '2026-01-01')
   })
 
   it('opens a period and flips status', async () => {
@@ -268,39 +282,31 @@ describe('freezing', () => {
 })
 
 describe('deleting a goal', () => {
-  it('tombstones the goal, its actions, their check-ins and its periods', async () => {
+  it('tombstones the heading and its periods, and detaches the work under it', async () => {
     await ensureSeeded()
-    const goalId = await saveGoal(
-      {
-        area_id: 1,
-        title: 'Doomed',
-        description: '',
-        importance: 'medium',
-        actions: [
-          { title: 'Thing', cadence_type: 'weekly', days: [2], monthly_day: null, month_weekday: null, month_ordinal: null, due_date: null, weight: null },
-        ],
-      },
-      '2026-01-01',
-    )
-    const action = (await db.subgoals.where('goal_id').equals(goalId).toArray())[0]!
-    await setCheckin(action.id, '2026-08-19', 'done')
+    const goalId = await saveGoal({ area_id: 1, title: 'Doomed', description: '' }, '2026-01-01')
+    const taskId = await saveTask(draft({ goal_id: goalId, title: 'Thing' }), '2026-01-01')
+    await setCheckin(taskId, '2026-08-19', 'done')
     await freezeGoal(goalId, '2026-03-01')
 
     await deleteGoal(goalId)
 
-    // Nothing is hard deleted — a delete has to be able to propagate (§10).
+    // The heading goes as a tombstone, so the removal can propagate (§10).
     expect(await db.goals.get(goalId)).toMatchObject({ deleted: true })
-    expect(await db.subgoals.get(action.id)).toMatchObject({ deleted: true })
-    expect(await db.checkins.get([action.id, '2026-08-19'])).toMatchObject({ deleted: true })
     expect((await db.freezes.where('goal_id').equals(goalId).toArray())[0]).toMatchObject({
       deleted: true,
     })
 
-    // And the pure core treats every one of them as absent.
+    // The task survives, on the area it was already scoring against, with its
+    // history intact: deleting a heading must not delete the work under it.
+    const task = await db.subgoals.get(taskId)
+    expect(task).toMatchObject({ deleted: false, archived: false, goal_id: null, area_id: 1 })
+    expect(await db.checkins.get([taskId, '2026-08-19'])).toMatchObject({ status: 'done' })
+
     const idx = buildIndex(await loadSnapshot(), TODAY)
     expect(idx.goalById.has(goalId)).toBe(false)
-    expect(idx.subgoalById.has(action.id)).toBe(false)
-    expect(buildToday(await loadSnapshot(), TODAY).total).toBe(0)
+    expect(idx.subgoalById.has(taskId)).toBe(true)
+    expect(buildToday(await loadSnapshot(), TODAY).items.map((i) => i.goalTitle)).toEqual([null])
   })
 })
 
@@ -351,7 +357,7 @@ describe('the migration import', () => {
 
   it('replaces whatever was there before', async () => {
     await ensureSeeded()
-    await saveGoal({ area_id: 1, title: 'Old', description: '', importance: 'low', actions: [] }, TODAY)
+    await saveGoal({ area_id: 1, title: 'Old', description: '' }, TODAY)
     await importSnapshot(exported, TODAY)
     expect((await db.goals.toArray()).map((g) => g.title)).toEqual(['Ship v2'])
     expect(await db.areas.count()).toBe(1)
@@ -389,8 +395,7 @@ describe('the migration import', () => {
 describe('id allocation', () => {
   beforeEach(ensureSeeded)
 
-  const mint = () =>
-    saveGoal({ area_id: 1, title: 'g', description: '', importance: 'low', actions: [] }, TODAY)
+  const mint = () => saveGoal({ area_id: 1, title: 'g', description: '' }, TODAY)
 
   it('never repeats an id on one device', async () => {
     const ids = new Set<number>()
@@ -438,10 +443,7 @@ describe('id allocation', () => {
       { areas: [{ id: 3, name: 'Work', position: 2 }], goals: [{ id: 41, area_id: 3, title: 'x' }] },
       TODAY,
     )
-    const minted = await saveGoal(
-      { area_id: 3, title: 'new', description: '', importance: 'low', actions: [] },
-      TODAY,
-    )
+    const minted = await saveGoal({ area_id: 3, title: 'new', description: '' }, TODAY)
     expect(minted).toBeGreaterThan(2 ** 20)
     expect(await db.goals.get(41)).toBeDefined()
   })

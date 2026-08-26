@@ -111,13 +111,13 @@ describe('monthly configuration', () => {
 
 describe('enums and flags', () => {
   it('falls back to sane defaults', () => {
-    const g = normaliseGoal({ status: 'paused', importance: 'urgent' }, TODAY)
+    const g = normaliseGoal({ status: 'paused' }, TODAY)
     expect(g.status).toBe('active')
-    expect(g.importance).toBe('medium')
+    expect(normaliseSubgoal({ importance: 'urgent' }, TODAY).importance).toBe('medium')
   })
 
   it('accepts a stray case or space', () => {
-    expect(normaliseGoal({ importance: ' HIGH ' }, TODAY).importance).toBe('high')
+    expect(normaliseSubgoal({ importance: ' HIGH ' }, TODAY).importance).toBe('high')
   })
 
   it('coerces truthy shapes to booleans', () => {

@@ -1,6 +1,6 @@
 # Startem
 
-Personal life tracker: areas → goals → recurring actions, scored on a radar chart. Offline-first PWA installed on an iPhone home screen + the same build signed in on the web. Single user (Artem).
+Personal life tracker: areas → optional goals → tasks, scored on a radar chart. Offline-first PWA installed on an iPhone home screen + the same build signed in on the web. Single user (Artem).
 
 **SPEC.md is the source of truth.** Read it before changing scheduling, scoring, or sync behaviour. If code and SPEC.md disagree, the spec wins; if a change is deliberate, update SPEC.md in the same commit.
 
@@ -14,7 +14,9 @@ TypeScript + React + Vite SPA · vite-plugin-pwa · Dexie (IndexedDB) on device 
 - Dates are **local-time `YYYY-MM-DD` strings** everywhere, compared lexicographically. Postgres columns are `date`, never `timestamptz` (only sync's `updated_at` is a timestamp).
 - Scoring window is **28 days**, never 30. Standing-mode look-backs: 45 days monthly, 115 quarterly.
 - Fixed monthly days are clamped to **1–28 on write and read**.
-- **Archive, never delete** actions; goals freeze via **periods** (freezes table), not just a flag; sync deletes are **tombstones** (`deleted` flag), never hard deletes.
+- **Archive, never delete** tasks; goals freeze via **periods** (freezes table), not just a flag; sync deletes are **tombstones** (`deleted` flag), never hard deletes.
+- Priority lives on the **task**, never the goal. A goal is a heading: optional, no weight, and deleting one **detaches** its tasks rather than destroying them.
+- A task's `area_id` is required, `goal_id` is nullable. `repeat_until` is **inclusive**; a freeze's `end_date` is **exclusive**. Repeat intervals anchor on `start_date ?? created_at`, never on today.
 - Today with no check-in is **pending**, not missed — excluded from the star's denominator, included in the calendar day's ratio. That inconsistency is deliberate (SPEC §6).
 - `src/core` is **pure**: it must import nothing — no Dexie, no Supabase, no React. Plain rows in, plain values out.
 

@@ -24,23 +24,44 @@ import { area, checkin, freeze, goal, snapshot, subgoal } from './test-fixtures'
 
 const TODAY = '2026-08-26' // a Wednesday
 
-const AREAS = [
+/**
+ * Fresh rows every call. A shared array would let one test's `deleted = true`
+ * leak into the next one, which is exactly the kind of silent cross-talk that
+ * makes a scoring bug look like a cadence bug.
+ */
+const AREAS = () => [
   area({ id: 1, name: 'Health', position: 0 }),
   area({ id: 2, name: 'Work', position: 1 }),
   area({ id: 3, name: 'Money', position: 2 }),
 ]
 
-/** One high goal in Health with a daily action, one low goal in Work. */
+/** A high task under a Health goal, a low one under a Work goal. */
 function twoAreas() {
   return snapshot({
-    areas: AREAS,
+    areas: AREAS(),
     goals: [
-      goal({ id: 1, area_id: 1, title: 'Bench 100 kg', importance: 'high' }),
-      goal({ id: 2, area_id: 2, title: 'Ship v2', importance: 'low' }),
+      goal({ id: 1, area_id: 1, title: 'Bench 100 kg' }),
+      goal({ id: 2, area_id: 2, title: 'Ship v2' }),
     ],
     subgoals: [
-      subgoal({ id: 1, goal_id: 1, title: 'Gym', cadence_type: 'weekly', days: [2] }),
-      subgoal({ id: 2, goal_id: 2, title: 'Deep work', cadence_type: 'weekly', days: [2] }),
+      subgoal({
+        id: 1,
+        area_id: 1,
+        goal_id: 1,
+        title: 'Gym',
+        importance: 'high',
+        cadence_type: 'weekly',
+        days: [2],
+      }),
+      subgoal({
+        id: 2,
+        area_id: 2,
+        goal_id: 2,
+        title: 'Deep work',
+        importance: 'low',
+        cadence_type: 'weekly',
+        days: [2],
+      }),
     ],
   })
 }
@@ -57,8 +78,8 @@ describe("Today's list", () => {
     // Work carries the heavier goal here, so its group must come first even
     // though Health sits earlier on the chart.
     const s = twoAreas()
-    s.goals[0]!.importance = 'low'
-    s.goals[1]!.importance = 'high'
+    s.subgoals[0]!.importance = 'low'
+    s.subgoals[1]!.importance = 'high'
     const view = buildToday(s, TODAY)
     expect(view.groups.map((g) => g.areaName)).toEqual(['Work', 'Health'])
   })
@@ -146,7 +167,7 @@ describe('the star', () => {
 
   it('divides 360° by however many areas there are', () => {
     const four = snapshot({
-      areas: [...AREAS, area({ id: 4, name: 'Family', position: 3 })],
+      areas: [...AREAS(), area({ id: 4, name: 'Family', position: 3 })],
       goals: [],
     })
     expect(buildStar(four, TODAY).vertices.map((v) => v.angle)).toEqual([-90, 0, 90, 180])
@@ -192,10 +213,10 @@ describe('the star', () => {
 describe('the three levels of percentage', () => {
   it('reads the goal weighted and the action unweighted', () => {
     const s = snapshot({
-      areas: AREAS,
-      goals: [goal({ id: 1, area_id: 1, importance: 'high' })],
+      areas: AREAS(),
+      goals: [goal({ id: 1, area_id: 1 })],
       subgoals: [
-        subgoal({ id: 1, goal_id: 1, cadence_type: 'weekly', days: [2] }),
+        subgoal({ id: 1, goal_id: 1, importance: 'high', cadence_type: 'weekly', days: [2] }),
         subgoal({ id: 2, goal_id: 1, cadence_type: 'weekly', days: [3], weight: 1 }),
       ],
       checkins: [
@@ -385,7 +406,14 @@ describe('the day detail checklist', () => {
   const withOnce = () => {
     const s = twoAreas()
     s.subgoals.push(
-      subgoal({ id: 3, goal_id: 1, title: 'Book a physio', cadence_type: 'once' }),
+      subgoal({
+        id: 3,
+        area_id: 1,
+        goal_id: 1,
+        title: 'Book a physio',
+        importance: 'high', // weight 4
+        cadence_type: 'once',
+      }),
     )
     return s
   }
@@ -447,8 +475,10 @@ describe('a completed one-time action moves the calendar and the star', () => {
     s.subgoals.push(
       subgoal({
         id: 3,
-        goal_id: 1, // Health, high → weight 4
+        area_id: 1,
+        goal_id: 1,
         title: 'Book a physio',
+        importance: 'high', // weight 4
         cadence_type: 'once',
         ...over,
       }),
@@ -513,14 +543,96 @@ describe('a completed one-time action moves the calendar and the star', () => {
   })
 })
 
+describe('a task with no goal at all', () => {
+  /** Health has one goal-less task; Work has one under a goal. */
+  function loose() {
+    return snapshot({
+      areas: AREAS(),
+      goals: [goal({ id: 2, area_id: 2, title: 'Ship v2' })],
+      subgoals: [
+        subgoal({
+          id: 1,
+          area_id: 1,
+          goal_id: null,
+          title: 'Call the dentist',
+          importance: 'high',
+          cadence_type: 'weekly',
+          days: [2],
+        }),
+        subgoal({
+          id: 2,
+          area_id: 2,
+          goal_id: 2,
+          title: 'Deep work',
+          importance: 'low',
+          cadence_type: 'weekly',
+          days: [2],
+        }),
+      ],
+    })
+  }
+
+  it('appears in the day, named by its area rather than by a goal', () => {
+    const item = buildToday(loose(), TODAY).items.find((i) => i.title === 'Call the dentist')!
+    expect(item.goal_id).toBeNull()
+    expect(item.goalTitle).toBeNull()
+    expect(item.areaName).toBe('Health')
+    expect(item.weight).toBe(4) // its own priority, with no goal to inherit from
+  })
+
+  it('scores its area exactly as a task under a goal would', () => {
+    const s = loose()
+    s.checkins = [
+      checkin({ subgoal_id: 1, date: '2026-08-05', status: 'done' }),
+      checkin({ subgoal_id: 1, date: '2026-08-12', status: 'done' }),
+      checkin({ subgoal_id: 1, date: '2026-08-19', status: 'skipped' }),
+    ]
+    const health = buildStar(s, TODAY).vertices.find((v) => v.name === 'Health')!
+    expect(health.available).toBe(3 * 4) // today is pending, not counted
+    expect(health.earned).toBe(2 * 4)
+    expect(health.rate).toBeCloseTo(2 / 3)
+  })
+
+  it('moves the calendar and the weekly strip like anything else', () => {
+    const s = loose()
+    s.checkins = [checkin({ subgoal_id: 1, date: '2026-08-19', status: 'done' })]
+    const cell = buildCalendar(s, TODAY)
+      .weeks.flatMap((w) => w.days)
+      .find((d) => d.date === '2026-08-19')!
+    expect(cell.total).toBe(4 + 1)
+    expect(cell.done).toBe(4)
+  })
+
+  it('has nothing that can freeze it — freezing is a goal-level idea', () => {
+    const s = loose()
+    s.freezes = [freeze({ id: 1, goal_id: 2, start_date: '2026-01-01' })]
+    s.goals[0]!.status = 'frozen'
+    const view = buildToday(s, TODAY)
+    // The Work task goes with its frozen goal; the loose Health one stays.
+    expect(view.items.map((i) => i.title)).toEqual(['Call the dentist'])
+  })
+})
+
 describe('tombstones and orphans', () => {
   it('drops tombstoned rows from every view', () => {
     const s = twoAreas()
-    s.areas[1]!.deleted = true
-    s.goals[0]!.deleted = true
+    s.areas[1]!.deleted = true // Work is gone, and so is the task inside it
+    s.goals[0]!.deleted = true // the Health *heading* is gone …
     const star = buildStar(s, TODAY)
     expect(star.vertices.map((v) => v.name)).toEqual(['Health', 'Money'])
-    expect(buildToday(s, TODAY).items).toEqual([])
+    // … but the work under it is not. A goal is a heading, and losing one must
+    // not silently delete the task's history along with it (§3).
+    const items = buildToday(s, TODAY).items
+    expect(items.map((i) => i.title)).toEqual(['Gym'])
+    expect(items[0]!.goal_id).toBeNull()
+    expect(items[0]!.areaName).toBe('Health')
+  })
+
+  it('drops a task whose area is gone — an area is the one thing it must have', () => {
+    const s = twoAreas()
+    s.areas[0]!.deleted = true
+    expect(buildIndex(s, TODAY).subgoalById.has(1)).toBe(false)
+    expect(buildToday(s, TODAY).items.map((i) => i.title)).toEqual(['Deep work'])
   })
 
   it('drops goals whose area is gone, rather than crashing', () => {
@@ -539,7 +651,7 @@ describe('tombstones and orphans', () => {
   })
 
   it('gives an empty snapshot a null score everywhere', () => {
-    const empty = snapshot({ areas: AREAS, goals: [] })
+    const empty = snapshot({ areas: AREAS(), goals: [] })
     const star = buildStar(empty, TODAY)
     expect(star.vertices.every((v) => v.score === null)).toBe(true)
     expect(buildToday(empty, TODAY).total).toBe(0)

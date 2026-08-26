@@ -10,7 +10,6 @@ import type {
   Checkin,
   CheckinStatus,
   Freeze,
-  Goal,
   Importance,
   ISODate,
   Subgoal,
@@ -129,9 +128,21 @@ export function daysBetween(from: ISODate, to: ISODate): number {
   return Math.round(ms / 86_400_000)
 }
 
+/** Whole months from `from` to `to`, ignoring the day of the month. */
+export function monthsBetween(from: ISODate, to: ISODate): number {
+  const [fy, fm] = parseISO(from)
+  const [ty, tm] = parseISO(to)
+  return (ty - fy) * 12 + (tm - fm)
+}
+
 /** The Monday of the week containing `date` (§2, §6 — weeks are Monday-start). */
 export function weekStart(date: ISODate): ISODate {
   return addDays(date, -dow(date))
+}
+
+/** Whole Monday-start weeks from the week of `from` to the week of `to`. */
+export function weeksBetween(from: ISODate, to: ISODate): number {
+  return daysBetween(weekStart(from), weekStart(to)) / 7
 }
 
 /** Every date from `from` to `to` inclusive. Empty when `to` precedes `from`. */
@@ -195,9 +206,47 @@ export function monthPattern(action: Subgoal, date: ISODate): boolean {
   return Math.ceil(dayOfMonth(date) / 7) === ordinal
 }
 
+/** Every repeat is "every N of something"; 1 unless a custom repeat says otherwise. */
+export function intervalOf(action: Subgoal): number {
+  const n = action.interval
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 1) return 1
+  return Math.round(n)
+}
+
+/**
+ * The date an interval counts from: the chosen start, or failing that the day
+ * the task was created. Anchoring on a stored date rather than on "today"
+ * is what keeps "every 4 weeks" landing on the same weeks tomorrow as it does
+ * today — a drifting anchor would silently reschedule the task on every read.
+ */
+export function anchorOf(action: Subgoal): ISODate {
+  return action.start_date ?? action.created_at
+}
+
+/**
+ * Does `date` fall on one of the repeat's periods? Always true for the plain
+ * `interval: 1` case, so the ordinary cadences pay nothing for this.
+ */
+function onIntervalStep(action: Subgoal, date: ISODate): boolean {
+  const every = intervalOf(action)
+  if (every === 1) return true
+  const anchor = anchorOf(action)
+  switch (action.cadence_type) {
+    case 'daily':
+      return daysBetween(anchor, date) % every === 0
+    case 'weekly':
+      return weeksBetween(anchor, date) % every === 0
+    case 'monthly':
+      return monthsBetween(anchor, date) % every === 0
+    default:
+      return true
+  }
+}
+
 /**
  * The one predicate everything rests on: does this action come due on this
- * date? `freezes` are the periods of the action's *goal* (§4).
+ * date? `freezes` are the periods of the action's *goal* — a task with no goal
+ * has none (§4).
  */
 export function isScheduled(
   action: Subgoal,
@@ -207,9 +256,16 @@ export function isScheduled(
   if (action.deleted) return false // tombstoned rows are simply not there
   if (action.archived) return false
   if (action.created_at > date) return false // did not exist yet
+  if (action.start_date != null && action.start_date > date) return false
+  // Inclusive, unlike a freeze's exclusive end: "ends on the 30th" has to
+  // include the 30th, which is what the repeat editor says out loud.
+  if (action.repeat_until != null && action.repeat_until < date) return false
   if (isFrozenOn(date, freezes)) return false
+  if (!onIntervalStep(action, date)) return false
 
   switch (action.cadence_type) {
+    case 'daily':
+      return true
     case 'weekly':
       return action.days.includes(dow(date))
     case 'monthly':
@@ -233,13 +289,19 @@ export const IMPORTANCE_WEIGHT: Record<Importance, number> = {
   low: 1,
 }
 
-/** An action inherits its goal's weight unless `subgoals.weight` overrides it. */
-export function weightOf(goal: Goal, action: Subgoal): number {
+/**
+ * A task's weight comes from its own priority, unless `subgoals.weight`
+ * overrides it with an explicit number.
+ *
+ * Priority is the task's, not the goal's: a goal groups work, it does not
+ * declare that every piece of it matters equally (§5).
+ */
+export function weightOf(action: Subgoal): number {
   const override = action.weight
   if (override != null && Number.isFinite(override) && override > 0) {
     return override
   }
-  return IMPORTANCE_WEIGHT[goal.importance] ?? IMPORTANCE_WEIGHT.medium
+  return IMPORTANCE_WEIGHT[action.importance] ?? IMPORTANCE_WEIGHT.medium
 }
 
 // ---------------------------------------------------------------------------
@@ -407,15 +469,38 @@ export function tallyRange(
   return tally
 }
 
+/**
+ * Roughly how many days sit between two occurrences. Only its size relative to
+ * the 28-day window matters: it picks which of the two standing readings a
+ * cadence gets, and how far the scanning one reaches (§5).
+ */
+export function periodDays(action: Subgoal): number {
+  const every = intervalOf(action)
+  switch (action.cadence_type) {
+    case 'daily':
+      return every
+    case 'weekly':
+      return every * 7
+    case 'monthly':
+      return every * 31
+    case 'quarterly':
+      return 97 // Jan → Apr → Jul → Oct
+    default:
+      return 1 // a one-time action is read through the plain window
+  }
+}
+
 /** How far standing mode reaches back for each cadence (§5). */
 export function lookbackFor(action: Subgoal): number {
   switch (action.cadence_type) {
     case 'monthly':
-      return MONTHLY_LOOKBACK_DAYS
+      return Math.max(MONTHLY_LOOKBACK_DAYS, periodDays(action) + 14)
     case 'quarterly':
       return QUARTERLY_LOOKBACK_DAYS
     default:
-      return SCORING_WINDOW_DAYS
+      // A custom repeat can outrun the 28-day window — "every 8 weeks" has no
+      // due date at all inside it — so it reaches back two whole periods.
+      return Math.max(SCORING_WINDOW_DAYS, periodDays(action) * 2)
   }
 }
 
@@ -439,7 +524,11 @@ export function tallyStanding(
   checkins: CheckinsByDate = NO_CHECKINS,
   freezes: readonly Freeze[] = [],
 ): Tally {
-  if (action.cadence_type === 'weekly' || action.cadence_type === 'once') {
+  // A cadence that fits inside the window is read through it directly: every
+  // weekday falls exactly four times in 28 days, so nothing can drop out. One
+  // that does not fit — monthly, quarterly, or a long custom repeat — is
+  // represented by its most recent due instance instead.
+  if (periodDays(action) <= SCORING_WINDOW_DAYS) {
     const from = addDays(today, -(SCORING_WINDOW_DAYS - 1))
     return tallyRange(action, weight, from, today, today, checkins, freezes)
   }

@@ -12,6 +12,7 @@ import {
   DEFAULT_AREAS,
   type Area,
   type CheckinStatus,
+  type ClockTime,
   type Freeze,
   type GoalStatus,
   type ISODate,
@@ -107,129 +108,154 @@ export async function toggleSkipped(
 }
 
 // ---------------------------------------------------------------------------
-// Goals and their actions (§7)
+// Goals (§7)
 // ---------------------------------------------------------------------------
 
-/** What the goal editor hands back. Actions without an id are new. */
+/**
+ * What the goal editor hands back.
+ *
+ * A goal is a heading: an area, a title and some prose. It carries no
+ * importance and owns no task list — tasks are created from the task
+ * composer and point *at* a goal, which is what lets one exist without a
+ * goal at all (§3, §7).
+ */
 export interface GoalDraft {
   id?: number
   area_id: number
   title: string
   description: string
-  importance: Importance
-  actions: ActionDraft[]
 }
 
-export interface ActionDraft {
-  id?: number
-  title: string
-  cadence_type: Subgoal['cadence_type']
-  days: number[]
-  monthly_day: number | null
-  month_weekday: number | null
-  month_ordinal: number | null
-  due_date: ISODate | null
-  weight: number | null
-}
-
-/**
- * Creates or updates a goal and its actions in one transaction.
- *
- * An action the user removed while editing is **archived, never deleted**:
- * its past check-ins still exist and still describe real days, and deleting
- * the action would orphan them and silently rewrite history (§3).
- */
+/** Creates or updates a goal. Returns its id. */
 export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<number> {
-  return db.transaction('rw', db.goals, db.subgoals, db.meta, async () => {
+  return db.transaction('rw', db.goals, db.meta, async () => {
     const now = stamp()
-    let goalId = draft.id
-
-    if (goalId == null) {
-      goalId = await newId()
-      await db.goals.add({
-        id: goalId,
-        area_id: draft.area_id,
-        title: draft.title,
-        description: draft.description,
-        status: 'active',
-        importance: draft.importance,
-        created_at: today,
-        updated_at: now,
-        deleted: false,
-      })
-    } else {
-      const existing = await db.goals.get(goalId)
-      await db.goals.put({
-        id: goalId,
-        area_id: draft.area_id,
-        title: draft.title,
-        description: draft.description,
-        status: existing?.status ?? 'active',
-        importance: draft.importance,
-        created_at: existing?.created_at ?? today,
-        updated_at: now,
-        deleted: false,
-      })
-    }
-
-    const kept = new Set<number>()
-    for (const action of draft.actions) {
-      const row = normaliseSubgoal(
-        {
-          ...action,
-          id: action.id ?? undefined,
-          goal_id: goalId,
-          archived: false,
-          created_at: action.id == null ? today : undefined,
-        },
-        today,
-      )
-      if (action.id == null) {
-        const created = await newId()
-        await db.subgoals.add({ ...row, id: created, updated_at: now, deleted: false })
-        kept.add(created)
-      } else {
-        const existing = await db.subgoals.get(action.id)
-        await db.subgoals.put({
-          ...row,
-          id: action.id,
-          created_at: existing?.created_at ?? today,
-          updated_at: now,
-          deleted: false,
-        })
-        kept.add(action.id)
-      }
-    }
-
-    // Anything the editor no longer lists is archived, not removed.
-    const all = await db.subgoals.where('goal_id').equals(goalId).toArray()
-    for (const row of all) {
-      if (!kept.has(row.id) && !row.archived) {
-        await db.subgoals.put({ ...row, archived: true, updated_at: now })
-      }
-    }
+    const existing = draft.id == null ? undefined : await db.goals.get(draft.id)
+    const goalId = draft.id ?? (await newId())
+    await db.goals.put({
+      id: goalId,
+      area_id: draft.area_id,
+      title: draft.title.trim(),
+      description: draft.description.trim(),
+      status: existing?.status ?? 'active',
+      created_at: existing?.created_at ?? today,
+      updated_at: now,
+      deleted: false,
+    })
     return goalId
   })
 }
 
 /**
- * Removes a goal, its actions, their check-ins and its freeze periods —
- * as tombstones, so the removal can propagate at §10 rather than a device
- * that missed it quietly resurrecting the goal on the next pull.
+ * The one-line create behind "Create new goal" in the task composer's area
+ * picker — the same write as the editor, minus the prose.
+ */
+export async function createGoal(
+  area_id: number,
+  title: string,
+  today = todayISO(),
+): Promise<number> {
+  return saveGoal({ area_id, title, description: '' }, today)
+}
+
+// ---------------------------------------------------------------------------
+// Tasks (§7)
+// ---------------------------------------------------------------------------
+
+/** What the task composer hands back. No id means a new task. */
+export interface TaskDraft {
+  id?: number
+  area_id: number
+  goal_id: number | null
+  title: string
+  importance: Importance
+  cadence_type: Subgoal['cadence_type']
+  interval: number
+  days: number[]
+  monthly_day: number | null
+  month_weekday: number | null
+  month_ordinal: number | null
+  due_date: ISODate | null
+  start_date: ISODate | null
+  repeat_until: ISODate | null
+  time: ClockTime | null
+  weight: number | null
+}
+
+/**
+ * Creates or updates one task.
+ *
+ * `created_at` is never rewritten on an edit: it is the day the task started
+ * existing, and moving it would retroactively schedule — or unschedule — every
+ * occurrence behind it (§3).
+ */
+export async function saveTask(draft: TaskDraft, today = todayISO()): Promise<number> {
+  return db.transaction('rw', db.subgoals, db.meta, async () => {
+    const now = stamp()
+    const existing = draft.id == null ? undefined : await db.subgoals.get(draft.id)
+    const id = draft.id ?? (await newId())
+    const row = normaliseSubgoal(
+      {
+        ...draft,
+        id,
+        goal_id: draft.goal_id ?? null,
+        archived: existing?.archived ?? false,
+        created_at: existing?.created_at ?? today,
+      },
+      today,
+    )
+    await db.subgoals.put({ ...row, id, updated_at: now, deleted: false })
+    return id
+  })
+}
+
+/**
+ * Removes a task from the interface without touching its history.
+ *
+ * **Archive, never delete:** its past check-ins still exist and still describe
+ * real days; deleting the task would orphan them and silently rewrite what
+ * those days looked like (§3).
+ */
+export async function archiveTask(taskId: number, archived = true): Promise<void> {
+  const task = await db.subgoals.get(taskId)
+  if (!task) return
+  await db.subgoals.put({ ...task, archived, updated_at: stamp() })
+}
+
+/** Moves a task to another area, and to a goal inside it or to no goal at all. */
+export async function moveTask(
+  taskId: number,
+  area_id: number,
+  goal_id: number | null,
+): Promise<void> {
+  const task = await db.subgoals.get(taskId)
+  if (!task) return
+  await db.subgoals.put({ ...task, area_id, goal_id, updated_at: stamp() })
+}
+
+/**
+ * Removes a goal — as a tombstone, so the removal can propagate at §10 rather
+ * than a device that missed it quietly resurrecting the goal on the next pull.
+ *
+ * Its tasks are **detached, not destroyed**: they fall back to the area they
+ * were already scoring against and keep every check-in. A goal is a heading
+ * now (§3), and deleting a heading must not delete the work under it — the
+ * way to retire a task is to archive that task.
  */
 export async function deleteGoal(goalId: number): Promise<void> {
-  await db.transaction('rw', db.goals, db.subgoals, db.checkins, db.freezes, async () => {
+  await db.transaction('rw', db.goals, db.subgoals, db.freezes, async () => {
     const now = stamp()
     const goal = await db.goals.get(goalId)
     if (goal) await db.goals.put({ ...goal, deleted: true, updated_at: now })
 
-    const actions = await db.subgoals.where('goal_id').equals(goalId).toArray()
-    for (const action of actions) {
-      await db.subgoals.put({ ...action, deleted: true, updated_at: now })
-      const rows = await db.checkins.where('subgoal_id').equals(action.id).toArray()
-      for (const row of rows) {
-        await db.checkins.put({ ...row, deleted: true, updated_at: now })
-      }
+    const tasks = await db.subgoals.where('goal_id').equals(goalId).toArray()
+    for (const task of tasks) {
+      await db.subgoals.put({
+        ...task,
+        goal_id: null,
+        area_id: task.area_id || goal?.area_id || 0,
+        updated_at: now,
+      })
     }
 
     const periods = await db.freezes.where('goal_id').equals(goalId).toArray()

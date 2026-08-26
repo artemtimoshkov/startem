@@ -21,7 +21,7 @@ import {
   weightOf,
 } from './score'
 import type { Checkin, ISODate } from './types'
-import { freeze, goal, subgoal } from './test-fixtures'
+import { freeze, subgoal } from './test-fixtures'
 
 const TODAY = '2026-08-26' // a Wednesday
 const WEDNESDAYS = subgoal({ cadence_type: 'weekly', days: [2] })
@@ -42,22 +42,28 @@ describe('weights', () => {
     expect(IMPORTANCE_WEIGHT).toEqual({ high: 4, medium: 2, low: 1 })
   })
 
-  it('inherits the goal importance', () => {
-    expect(weightOf(goal({ importance: 'high' }), subgoal())).toBe(4)
-    expect(weightOf(goal({ importance: 'medium' }), subgoal())).toBe(2)
-    expect(weightOf(goal({ importance: 'low' }), subgoal())).toBe(1)
+  it("comes from the task's own priority, not the goal above it", () => {
+    expect(weightOf(subgoal({ importance: 'high' }))).toBe(4)
+    expect(weightOf(subgoal({ importance: 'medium' }))).toBe(2)
+    expect(weightOf(subgoal({ importance: 'low' }))).toBe(1)
   })
 
-  it('lets a per-action weight override it', () => {
-    expect(weightOf(goal({ importance: 'low' }), subgoal({ weight: 7 }))).toBe(7)
-    expect(weightOf(goal({ importance: 'high' }), subgoal({ weight: 1 }))).toBe(1)
+  it('weighs two tasks under one goal differently', () => {
+    const light = subgoal({ id: 1, goal_id: 1, importance: 'low' })
+    const heavy = subgoal({ id: 2, goal_id: 1, importance: 'high' })
+    expect(weightOf(light)).toBe(1)
+    expect(weightOf(heavy)).toBe(4)
   })
 
-  it('falls back to the goal when the override is absent or nonsensical', () => {
-    const g = goal({ importance: 'high' })
-    expect(weightOf(g, subgoal({ weight: null }))).toBe(4)
-    expect(weightOf(g, subgoal({ weight: 0 }))).toBe(4)
-    expect(weightOf(g, subgoal({ weight: -3 }))).toBe(4)
+  it('lets a per-task weight override it', () => {
+    expect(weightOf(subgoal({ importance: 'low', weight: 7 }))).toBe(7)
+    expect(weightOf(subgoal({ importance: 'high', weight: 1 }))).toBe(1)
+  })
+
+  it('falls back to the priority when the override is absent or nonsensical', () => {
+    expect(weightOf(subgoal({ importance: 'high', weight: null }))).toBe(4)
+    expect(weightOf(subgoal({ importance: 'high', weight: 0 }))).toBe(4)
+    expect(weightOf(subgoal({ importance: 'high', weight: -3 }))).toBe(4)
   })
 
   it('lets frequency multiply weight, deliberately', () => {

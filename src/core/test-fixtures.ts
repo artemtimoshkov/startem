@@ -24,7 +24,6 @@ export function goal(over: Partial<Goal> = {}): Goal {
     title: 'Reach 100 kg bench press',
     description: '',
     status: 'active',
-    importance: 'medium',
     created_at: '2000-01-01',
     ...over,
   }
@@ -33,20 +32,29 @@ export function goal(over: Partial<Goal> = {}): Goal {
 export function subgoal(over: Partial<Subgoal> = {}): Subgoal {
   return {
     id: 1,
+    area_id: 1,
     goal_id: 1,
     title: 'Gym session',
+    importance: 'medium',
     cadence_type: 'weekly',
+    interval: 1,
     days: [],
     monthly_day: null,
     month_weekday: null,
     month_ordinal: null,
     due_date: null,
+    start_date: null,
+    repeat_until: null,
+    time: null,
     weight: null,
     created_at: '2000-01-01',
     archived: false,
     ...over,
   }
 }
+
+/** The same builder under the name the app now uses for the row. */
+export const task = subgoal
 
 export function checkin(over: Partial<Checkin> & Pick<Checkin, 'date'>): Checkin {
   return { subgoal_id: 1, status: 'done', ...over }

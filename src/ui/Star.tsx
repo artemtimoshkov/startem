@@ -1,14 +1,16 @@
 /** Views 2 and 3 — the star and the weekly history strip (SPEC.md §6). */
 
 import {
+  actionRate,
   buildStar,
   buildWeeklyStrip,
   goalRate,
+  taskRepeatLabel,
   type Goal,
 } from '../core'
 import { useSnapshot } from './DataContext'
 import { CalendarGrid, GoalGrid, RadarChart, WeeklyStrip } from './charts'
-import { ImportanceDot, ListLink, Percent, ScoreBadge, TopBar } from './bits'
+import { ListLink, Percent, ScoreBadge, Stripe, TopBar } from './bits'
 import { navigate } from './router'
 
 export function StarScreen() {
@@ -81,6 +83,8 @@ export function AreaScreen({ areaId }: { areaId: number }) {
   const goals = index.goalsByArea.get(areaId) ?? []
   const activeGoals = goals.filter((g) => g.status === 'active')
   const frozenGoals = goals.filter((g) => g.status === 'frozen')
+  // Tasks hanging straight off the area, with no goal above them (§3).
+  const loose = (index.subgoalsByArea.get(areaId) ?? []).filter((t) => t.goal_id == null)
 
   return (
     <div className="screen">
@@ -101,7 +105,9 @@ export function AreaScreen({ areaId }: { areaId: number }) {
 
       {goals.length === 0 ? (
         <div className="card">
-          <p className="empty">No goals in {area.name} yet.</p>
+          <p className="empty">
+            No goals in {area.name} yet — goals are created here, tasks from the Tasks screen.
+          </p>
         </div>
       ) : null}
 
@@ -123,6 +129,31 @@ export function AreaScreen({ areaId }: { areaId: number }) {
           </div>
         </>
       ) : null}
+
+      {loose.length > 0 ? (
+        <>
+          <p className="section-label">Tasks with no goal</p>
+          <div className="card">
+            {loose.map((task) => (
+              <button
+                key={task.id}
+                type="button"
+                className="row row-button"
+                onClick={() => navigate(`/tasks/${task.id}`)}
+              >
+                <Stripe importance={task.importance} />
+                <div className="row-body">
+                  <div className="row-title">{task.title}</div>
+                  <div className="row-meta">
+                    <span>{taskRepeatLabel(task, { short: true })}</span>
+                  </div>
+                </div>
+                <Percent rate={actionRate(index, task)} />
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -131,11 +162,13 @@ function GoalRow({ goal }: { goal: Goal }) {
   const { index } = useSnapshot()
   const frozen = goal.status === 'frozen'
   const rate = frozen ? null : goalRate(index, goal)
-  const actions = index.subgoalsByGoal.get(goal.id) ?? []
+  const tasks = index.subgoalsByGoal.get(goal.id) ?? []
 
   return (
     <ListLink to={`/goals/${goal.id}`} ariaLabel={`${goal.title}, open goal`}>
-      <span className={`row-stripe ${frozen ? 'bg-frozen' : `bg-${goal.importance}`}`} aria-hidden="true" />
+      {/* A goal has no priority of its own to advertise — the stripe only
+          marks it as live or frozen (§3). */}
+      <span className={`row-stripe ${frozen ? 'bg-frozen' : 'bg-goal'}`} aria-hidden="true" />
       <span style={{ flex: 1, paddingLeft: 6 }}>
         {goal.title}
         <span
@@ -148,8 +181,7 @@ function GoalRow({ goal }: { goal: Goal }) {
             marginTop: 2,
           }}
         >
-          <ImportanceDot importance={goal.importance} frozen={frozen} />
-          {actions.length} action{actions.length === 1 ? '' : 's'}
+          {tasks.length} task{tasks.length === 1 ? '' : 's'}
           {frozen ? ' · frozen' : null}
         </span>
       </span>
