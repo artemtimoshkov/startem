@@ -1,4 +1,4 @@
-# Startem Build Spec — v2.1, 26 August 2026
+# Startem Build Spec — v2.2, 26 August 2026
 
 Everything needed to rebuild the app from nothing: every field, every scheduling rule, the scoring maths, the mistakes already paid for once — and the decided stack it ships on.
 
@@ -48,11 +48,22 @@ This convention survives the round trip to the server: in Postgres these columns
 
 Five tables. Field names below are the storage names — the same shapes work in SQLite, Postgres or IndexedDB.
 
+> **Ids are `bigint`, and new ones are minted per device.** Every id is
+> `deviceKey * 2^20 + counter`, where each install draws a random 20-bit
+> `deviceKey` once. A shared auto-increment counter cannot work here: §10
+> upserts rows between devices *by primary key*, so two devices that both
+> allocate `47` while offline do not produce two goals — they produce one that
+> last-write-wins silently merges, losing an edit. For an offline-first app that
+> is the normal case, not an edge case. Partitioning the space removes the
+> collision rather than making it unlikely, and the result stays under 2^40, so
+> it is exact in a JS number. Imported ids keep whatever values they arrive
+> with; `deviceKey` starts at 1 so small legacy ids can never be re-minted.
+
 ### areas
 
 | Field | Type | Notes |
 |---|---|---|
-| id | int, pk | — |
+| id | bigint, pk | — |
 | name | text | Renameable by the user. |
 | position | int | Order around the chart, clockwise from the top. |
 
@@ -62,8 +73,8 @@ Default set of ten: Health, Hobbies, Work, Business, Friends, Family, Purpose, M
 
 | Field | Type | Notes |
 |---|---|---|
-| id | int, pk | — |
-| area_id | int, fk | → areas.id |
+| id | bigint, pk | — |
+| area_id | bigint, fk | → areas.id |
 | title | text | — |
 | description | text | Optional. Free text — used for definitions of done, prompts. |
 | status | enum | `active` / `frozen` — frozen goals leave scoring entirely. |
@@ -74,8 +85,8 @@ Default set of ten: Health, Hobbies, Work, Business, Friends, Family, Purpose, M
 
 | Field | Type | Notes |
 |---|---|---|
-| id | int, pk | — |
-| goal_id | int, fk | → goals.id |
+| id | bigint, pk | — |
+| goal_id | bigint, fk | → goals.id |
 | title | text | — |
 | cadence_type | enum | `weekly` / `monthly` / `quarterly` / `once` |
 | days | json int[] | Weekly only. Weekday numbers, e.g. `[0,2,5]`. Empty for other cadences. |
@@ -93,7 +104,7 @@ Default set of ten: Health, Hobbies, Work, Business, Friends, Family, Purpose, M
 
 | Field | Type | Notes |
 |---|---|---|
-| subgoal_id | int, fk | → subgoals.id |
+| subgoal_id | bigint, fk | → subgoals.id |
 | date | date | Unique together with subgoal_id. This pair is the real key. |
 | status | enum | `done` / `skipped` |
 
@@ -103,8 +114,8 @@ Default set of ten: Health, Hobbies, Work, Business, Friends, Family, Purpose, M
 
 | Field | Type | Notes |
 |---|---|---|
-| id | int, pk | — |
-| goal_id | int, fk | → goals.id |
+| id | bigint, pk | — |
+| goal_id | bigint, fk | → goals.id |
 | start_date | date | — |
 | end_date | date, null | Null means still frozen. |
 
@@ -418,7 +429,7 @@ on app open, on regaining network, and after each write (debounced):
          (applying tombstones); then advance last_pulled_at
 ```
 
-- **Last-write-wins** by `updated_at` is the entire conflict policy. For one person's habit data, the newer edit is simply the right one.
+- **Last-write-wins** by `updated_at` is the entire conflict policy. For one person's habit data, the newer edit is simply the right one. This is exactly why ids are minted per device (§3): last-write-wins on a colliding primary key does not merge two rows safely, it destroys one of them.
 - Sync runs in the background. Nothing in the interface ever waits on it — the only visible trace is a small "synced / pending / offline" indicator.
 - The outbox lives in IndexedDB alongside the data, so changes made across several offline days all push when the network returns.
 

@@ -217,10 +217,15 @@ function toDraft(action: Subgoal): ActionDraft {
   }
 }
 
-export function GoalEditorScreen({ goalId }: { goalId: number | null }) {
+export function GoalEditorScreen({
+  goalId,
+  presetAreaId,
+}: {
+  goalId: number | null
+  presetAreaId?: number
+}) {
   const { index, today } = useSnapshot()
   const existing = goalId == null ? undefined : index.goalById.get(goalId)
-  const presetArea = Number(new URLSearchParams(window.location.search).get('area'))
 
   const [draft, setDraft] = useState<Draft>(() => {
     if (existing) {
@@ -233,7 +238,10 @@ export function GoalEditorScreen({ goalId }: { goalId: number | null }) {
       }
     }
     return {
-      area_id: Number.isFinite(presetArea) && presetArea > 0 ? presetArea : (index.areas[0]?.id ?? 1),
+      area_id:
+        presetAreaId != null && index.areaById.has(presetAreaId)
+          ? presetAreaId
+          : (index.areas[0]?.id ?? 1),
       title: '',
       description: '',
       importance: 'medium',
@@ -278,7 +286,13 @@ export function GoalEditorScreen({ goalId }: { goalId: number | null }) {
     <div className="screen">
       <TopBar
         title={existing ? 'Edit goal' : 'New goal'}
-        backTo={existing ? `/goals/${existing.id}` : '/star'}
+        backTo={
+          existing
+            ? `/goals/${existing.id}`
+            : presetAreaId != null
+              ? `/areas/${presetAreaId}`
+              : '/star'
+        }
       />
 
       <div className="card card-pad">
@@ -374,7 +388,15 @@ export function GoalEditorScreen({ goalId }: { goalId: number | null }) {
         <button
           type="button"
           className="btn btn-quiet"
-          onClick={() => navigate(existing ? `/goals/${existing.id}` : '/star')}
+          onClick={() =>
+            navigate(
+              existing
+                ? `/goals/${existing.id}`
+                : presetAreaId != null
+                  ? `/areas/${presetAreaId}`
+                  : '/star',
+            )
+          }
         >
           Cancel
         </button>

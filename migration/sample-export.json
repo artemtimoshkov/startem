@@ -1,0 +1,53 @@
+{
+  "areas": [
+    {"id": 1, "name": "Health", "position": 0},
+    {"id": 2, "name": "Hobbies", "position": 1},
+    {"id": 3, "name": "Work", "position": 2},
+    {"id": 4, "name": "Business", "position": 3},
+    {"id": 5, "name": "Friends", "position": 4},
+    {"id": 6, "name": "Family", "position": 5},
+    {"id": 7, "name": "Purpose", "position": 6},
+    {"id": 8, "name": "Money", "position": 7},
+    {"id": 9, "name": "Relationship", "position": 8},
+    {"id": 10, "name": "Other", "position": 9}
+  ],
+  "goals": [
+    {"id": 41, "area_id": 1, "title": "Reach 100 kg bench press", "description": "Progressive overload, three sessions a week.", "status": "active", "importance": "high", "created_at": "2026-01-04"},
+    {"id": 42, "area_id": 1, "title": "Sleep before midnight", "description": "", "status": "active", "importance": "medium", "created_at": "2026-02-01"},
+    {"id": 43, "area_id": 3, "title": "Ship Startem v2", "description": "", "status": "active", "importance": "high", "created_at": "2026-03-01"},
+    {"id": 44, "area_id": 8, "title": "Month-end finances", "description": "", "status": "active", "importance": "low", "created_at": "2026-01-01"},
+    {"id": 45, "area_id": 6, "title": "Call parents weekly", "description": "", "status": "frozen", "importance": "medium", "created_at": "2026-01-01"}
+  ],
+  "subgoals": [
+    {"id": 101, "goal_id": 41, "title": "Gym session", "cadence_type": "weekly", "days": [0,2,5], "created_at": "2026-01-04"},
+    {"id": 102, "goal_id": 41, "title": "Protein target", "cadence_type": "weekly", "days": [0,1,2,3,4,5,6], "weight": 1, "created_at": "2026-01-04"},
+    {"id": 103, "goal_id": 42, "title": "Lights out", "cadence_type": "weekly", "days": [0,1,2,3,4], "created_at": "2026-02-01"},
+    {"id": 104, "goal_id": 43, "title": "Deep work block", "cadence_type": "weekly", "days": [0,1,2,3,4], "created_at": "2026-03-01"},
+    {"id": 105, "goal_id": 43, "title": "Ship a release", "cadence_type": "monthly", "month_weekday": 4, "month_ordinal": -1, "created_at": "2026-03-01"},
+    {"id": 106, "goal_id": 44, "title": "Reconcile accounts", "cadence_type": "monthly", "monthly_day": 31, "created_at": "2026-01-01"},
+    {"id": 107, "goal_id": 44, "title": "Quarterly tax check", "cadence_type": "quarterly", "monthly_day": 5, "created_at": "2026-01-01"},
+    {"id": 108, "goal_id": 43, "title": "Book the domain", "cadence_type": "once", "due_date": "2026-08-20", "created_at": "2026-07-01"},
+    {"id": 109, "goal_id": 41, "title": "Old warm-up routine", "cadence_type": "weekly", "days": [0], "archived": true, "created_at": "2026-01-04"},
+    {"id": 110, "goal_id": 45, "title": "Sunday call", "cadence_type": "weekly", "days": [6], "created_at": "2026-01-01"}
+  ],
+  "checkins": [
+    {"subgoal_id": 101, "date": "2026-08-05", "status": "done"},
+    {"subgoal_id": 101, "date": "2026-08-08", "status": "done"},
+    {"subgoal_id": 101, "date": "2026-08-10", "status": "done"},
+    {"subgoal_id": 101, "date": "2026-08-12", "status": "skipped"},
+    {"subgoal_id": 101, "date": "2026-08-15", "status": "done"},
+    {"subgoal_id": 101, "date": "2026-08-17", "status": "done"},
+    {"subgoal_id": 101, "date": "2026-08-19", "status": "done"},
+    {"subgoal_id": 101, "date": "2026-08-22", "status": "done"},
+    {"subgoal_id": 101, "date": "2026-08-24", "status": "done"},
+    {"subgoal_id": 103, "date": "2026-08-24", "status": "done"},
+    {"subgoal_id": 103, "date": "2026-08-25", "status": "done"},
+    {"subgoal_id": 104, "date": "2026-08-24", "status": "done"},
+    {"subgoal_id": 104, "date": "2026-08-25", "status": "skipped"},
+    {"subgoal_id": 106, "date": "2026-07-28", "status": "done"},
+    {"subgoal_id": 105, "date": "2026-07-31", "status": "done"}
+  ],
+  "freezes": [
+    {"id": 7, "goal_id": 45, "start_date": "2026-06-01", "end_date": null}
+  ]
+}

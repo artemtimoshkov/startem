@@ -13,7 +13,6 @@ import {
   type Area,
   type CheckinStatus,
   type Freeze,
-  type Goal,
   type GoalStatus,
   type ISODate,
   type Importance,
@@ -23,7 +22,7 @@ import {
   normaliseSubgoal,
   todayISO,
 } from '../core'
-import { db } from './db'
+import { db, newId, reserveIds } from './db'
 
 /** Set on every write, so §10's last-write-wins has something to order by. */
 function stamp(): string {
@@ -140,13 +139,14 @@ export interface ActionDraft {
  * the action would orphan them and silently rewrite history (§3).
  */
 export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<number> {
-  return db.transaction('rw', db.goals, db.subgoals, async () => {
+  return db.transaction('rw', db.goals, db.subgoals, db.meta, async () => {
     const now = stamp()
     let goalId = draft.id
 
     if (goalId == null) {
-      goalId = (await db.goals.add({
-        id: undefined as unknown as number,
+      goalId = await newId()
+      await db.goals.add({
+        id: goalId,
         area_id: draft.area_id,
         title: draft.title,
         description: draft.description,
@@ -155,7 +155,7 @@ export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<nu
         created_at: today,
         updated_at: now,
         deleted: false,
-      })) as number
+      })
     } else {
       const existing = await db.goals.get(goalId)
       await db.goals.put({
@@ -184,12 +184,8 @@ export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<nu
         today,
       )
       if (action.id == null) {
-        const created = (await db.subgoals.add({
-          ...row,
-          id: undefined as unknown as number,
-          updated_at: now,
-          deleted: false,
-        })) as number
+        const created = await newId()
+        await db.subgoals.add({ ...row, id: created, updated_at: now, deleted: false })
         kept.add(created)
       } else {
         const existing = await db.subgoals.get(action.id)
@@ -250,7 +246,7 @@ export async function deleteGoal(goalId: number): Promise<void> {
  * back-fill the dormant weeks with misses (§3).
  */
 export async function freezeGoal(goalId: number, today = todayISO()): Promise<void> {
-  await db.transaction('rw', db.goals, db.freezes, async () => {
+  await db.transaction('rw', db.goals, db.freezes, db.meta, async () => {
     const now = stamp()
     const goal = await db.goals.get(goalId)
     if (!goal) return
@@ -259,7 +255,7 @@ export async function freezeGoal(goalId: number, today = todayISO()): Promise<vo
     )
     if (!open) {
       await db.freezes.add({
-        id: undefined as unknown as number,
+        id: await newId(),
         goal_id: goalId,
         start_date: today,
         end_date: null,
@@ -273,7 +269,7 @@ export async function freezeGoal(goalId: number, today = todayISO()): Promise<vo
 
 /** Closes the open period. `end_date` is exclusive, so today is live again. */
 export async function unfreezeGoal(goalId: number, today = todayISO()): Promise<void> {
-  await db.transaction('rw', db.goals, db.freezes, async () => {
+  await db.transaction('rw', db.goals, db.freezes, db.meta, async () => {
     const now = stamp()
     const goal = await db.goals.get(goalId)
     if (!goal) return
@@ -335,11 +331,7 @@ export async function importSnapshot(raw: unknown, today = todayISO()): Promise<
 
   await db.transaction(
     'rw',
-    db.areas,
-    db.goals,
-    db.subgoals,
-    db.checkins,
-    db.freezes,
+    [db.areas, db.goals, db.subgoals, db.checkins, db.freezes, db.meta],
     async () => {
       await Promise.all([
         db.areas.clear(),
@@ -353,6 +345,12 @@ export async function importSnapshot(raw: unknown, today = todayISO()): Promise<
       await db.subgoals.bulkPut(withStamp(snapshot.subgoals))
       await db.checkins.bulkPut(withStamp(snapshot.checkins))
       await db.freezes.bulkPut(withStamp(snapshot.freezes))
+      await reserveIds([
+        ...snapshot.areas.map((r) => r.id),
+        ...snapshot.goals.map((r) => r.id),
+        ...snapshot.subgoals.map((r) => r.id),
+        ...snapshot.freezes.map((r) => r.id),
+      ])
     },
   )
 
@@ -373,49 +371,20 @@ export async function exportSnapshot(): Promise<Snapshot> {
 }
 
 // ---------------------------------------------------------------------------
-// A small amount of demo data, so a fresh install is not a blank wall
+// Sample data
 // ---------------------------------------------------------------------------
 
-export async function seedExample(today = todayISO()): Promise<void> {
-  await ensureSeeded()
-  const existing = await db.goals.count()
-  if (existing > 0) return
-  const now = stamp()
-  const goals: Goal[] = [
-    {
-      id: 1,
-      area_id: 1,
-      title: 'Reach 100 kg bench press',
-      description: 'Three sessions a week, progressive overload.',
-      status: 'active',
-      importance: 'high',
-      created_at: today,
-      updated_at: now,
-      deleted: false,
-    },
-  ]
-  const subgoals: Subgoal[] = [
-    {
-      id: 1,
-      goal_id: 1,
-      title: 'Gym session',
-      cadence_type: 'weekly',
-      days: [0, 2, 5],
-      monthly_day: null,
-      month_weekday: null,
-      month_ordinal: null,
-      due_date: null,
-      weight: null,
-      created_at: today,
-      archived: false,
-      updated_at: now,
-      deleted: false,
-    },
-  ]
-  await db.transaction('rw', db.goals, db.subgoals, async () => {
-    await db.goals.bulkPut(goals)
-    await db.subgoals.bulkPut(subgoals)
-  })
+/**
+ * Loads `migration/sample-export.json` through the ordinary import path.
+ *
+ * It exists for the same reason the file is checked in: a fresh install has
+ * nothing to show, and the star, the strip and the calendar cannot be judged
+ * against an empty store. It is also a live, working example of the export
+ * shape the real migration has to match.
+ */
+export async function importSample(today = todayISO()): Promise<ImportResult> {
+  const sample: unknown = (await import('../../migration/sample-export.json')).default
+  return importSnapshot(sample, today)
 }
 
 export type { Area, Freeze }
