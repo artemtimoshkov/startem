@@ -10,6 +10,9 @@ import {
   colourBand,
   dayCellState,
   eachDay,
+  isScheduled,
+  occurrenceOn,
+  onceOccurrence,
   rateOf,
   scoreOf,
   scoreOfTally,
@@ -281,11 +284,11 @@ describe('standing mode: rare cadences keep their place', () => {
     })
   })
 
-  it('contributes nothing for a one-time action — it never comes due', () => {
+  it('scores a one-time action through its single occurrence', () => {
     const once = subgoal({ cadence_type: 'once', due_date: '2026-08-01' })
     expect(tallyStanding(once, 4, TODAY, log({ '2026-08-01': 'done' }))).toEqual({
-      earned: 0,
-      available: 0,
+      earned: 4,
+      available: 4,
     })
   })
 
@@ -295,6 +298,93 @@ describe('standing mode: rare cadences keep their place', () => {
       earned: 0,
       available: 0,
     })
+  })
+})
+
+describe('one-time actions earn and lose weight, on one effective date', () => {
+  const physio = subgoal({ cadence_type: 'once', due_date: '2026-08-10' })
+
+  it('is a win once completed, credited to the day it was logged', () => {
+    const t = tallyStanding(physio, 4, TODAY, log({ '2026-08-20': 'done' }))
+    expect(t).toEqual({ earned: 4, available: 4 })
+    // The credit lands on the day the work happened, not on the deadline.
+    const onTheDay = tallyRange(physio, 4, '2026-08-20', '2026-08-20', TODAY, log({ '2026-08-20': 'done' }))
+    expect(onTheDay).toEqual({ earned: 4, available: 4 })
+    const onTheDeadline = tallyRange(physio, 4, '2026-08-10', '2026-08-10', TODAY, log({ '2026-08-20': 'done' }))
+    expect(onTheDeadline).toEqual({ earned: 0, available: 0 })
+  })
+
+  it('is a standing miss once its deadline passes, credited to the deadline', () => {
+    const t = tallyStanding(physio, 4, TODAY, new Map())
+    expect(t).toEqual({ earned: 0, available: 4 })
+    expect(
+      tallyRange(physio, 4, '2026-08-10', '2026-08-10', TODAY, new Map()),
+    ).toEqual({ earned: 0, available: 4 })
+  })
+
+  it('counts a crossed-out one-time action as a miss', () => {
+    expect(tallyStanding(physio, 4, TODAY, log({ '2026-08-20': 'skipped' }))).toEqual({
+      earned: 0,
+      available: 4,
+    })
+  })
+
+  it('is simply not yet owed before its deadline — and due today is pending', () => {
+    const future = subgoal({ cadence_type: 'once', due_date: '2026-12-01' })
+    expect(tallyStanding(future, 4, TODAY, new Map())).toEqual({ earned: 0, available: 0 })
+    const dueToday = subgoal({ cadence_type: 'once', due_date: TODAY })
+    expect(tallyStanding(dueToday, 4, TODAY, new Map())).toEqual({ earned: 0, available: 0 })
+  })
+
+  it('never counts against anything with no deadline at all', () => {
+    const someday = subgoal({ cadence_type: 'once', due_date: null })
+    expect(tallyStanding(someday, 4, TODAY, new Map())).toEqual({ earned: 0, available: 0 })
+    // But it is still a win once done.
+    expect(tallyStanding(someday, 4, TODAY, log({ [TODAY]: 'done' }))).toEqual({
+      earned: 4,
+      available: 4,
+    })
+  })
+
+  it('ages out of the 28-day window rather than propping the score up forever', () => {
+    const old = log({ '2026-01-05': 'done' })
+    expect(tallyStanding(physio, 4, TODAY, old)).toEqual({ earned: 0, available: 0 })
+    // Still visible on its own day in the calendar, though.
+    expect(tallyRange(physio, 4, '2026-01-05', '2026-01-05', TODAY, old)).toEqual({
+      earned: 4,
+      available: 4,
+    })
+  })
+
+  it('has exactly one occurrence — never two', () => {
+    const occ = onceOccurrence(physio, TODAY, log({ '2026-08-20': 'done' }))
+    expect(occ).toEqual({ date: '2026-08-20', status: 'done' })
+    const days = eachDay('2026-07-01', TODAY).filter(
+      (d) => occurrenceOn(physio, d, TODAY, log({ '2026-08-20': 'done' })) !== null,
+    )
+    expect(days).toEqual(['2026-08-20'])
+  })
+
+  it('contributes nothing while archived, tombstoned or frozen', () => {
+    const done = log({ '2026-08-20': 'done' })
+    expect(onceOccurrence({ ...physio, archived: true }, TODAY, done)).toBeNull()
+    expect(onceOccurrence({ ...physio, deleted: true }, TODAY, done)).toBeNull()
+    expect(
+      onceOccurrence(physio, TODAY, done, [
+        freeze({ start_date: '2026-08-01', end_date: null }),
+      ]),
+    ).toBeNull()
+  })
+
+  it('ignores a log entry from before the action existed', () => {
+    const born = subgoal({ ...physio, created_at: '2026-08-15' })
+    expect(onceOccurrence(born, TODAY, log({ '2026-08-01': 'done' }))).toBeNull()
+  })
+
+  it('still never recurs — isScheduled stays false on every date', () => {
+    for (const d of eachDay('2026-08-01', '2026-08-31')) {
+      expect(isScheduled(physio, d)).toBe(false)
+    }
   })
 })
 

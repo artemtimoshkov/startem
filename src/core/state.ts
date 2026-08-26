@@ -20,6 +20,8 @@ import {
   emptyTally,
   isFrozenOn,
   isScheduled,
+  occurrenceOn,
+  onceOccurrence,
   rateOf,
   scoreOf,
   tallyRange,
@@ -227,6 +229,8 @@ export interface TodayItem {
   due_date: ISODate | null
   /** null means unresolved — pending, not missed. */
   status: CheckinStatus | null
+  /** A one-time action whose deadline has passed unresolved: a standing miss. */
+  overdue: boolean
 }
 
 export interface TodayGroup {
@@ -292,6 +296,8 @@ export function buildToday(snapshot: Snapshot, today: ISODate): TodayView {
         once,
         due_date: action.due_date,
         status: todayCheckin ? todayCheckin.status : null,
+        overdue:
+          once && !todayCheckin && action.due_date != null && action.due_date < today,
       })
     }
   }
@@ -488,12 +494,12 @@ function resolveGoalDay(idx: Index, goal: Goal, date: ISODate): DayResolution {
   const freezes = freezesOf(idx, goal.id)
   const out = emptyResolution()
   for (const action of actionsOf(idx, goal.id)) {
-    if (!isScheduled(action, date, freezes)) continue
+    const occ = occurrenceOn(action, date, idx.today, checkinsOf(idx, action.id), freezes)
+    if (!occ) continue
     out.due++
-    const c = checkinsOf(idx, action.id).get(date)
-    if (!c) out.unresolved++
-    else if (c.status === 'done') out.done++
-    else out.skipped++
+    if (occ.status === 'done') out.done++
+    else if (occ.status === 'skipped') out.skipped++
+    else out.unresolved++
   }
   return out
 }
@@ -559,7 +565,8 @@ function totalsForDay(idx: Index, date: ISODate): DayTotals {
   for (const goal of activeGoals(idx)) {
     const freezes = freezesOf(idx, goal.id)
     for (const action of actionsOf(idx, goal.id)) {
-      if (!isScheduled(action, date, freezes)) continue
+      const occ = occurrenceOn(action, date, idx.today, checkinsOf(idx, action.id), freezes)
+      if (!occ) continue
       const weight = weightOf(goal, action)
       // A day cell's ratio counts *all* weight due, including today's
       // unresolved items — today reads as progress so far. The star excludes
@@ -567,12 +574,10 @@ function totalsForDay(idx: Index, date: ISODate): DayTotals {
       // do not "fix" one to match the other.
       totals.total += weight
       totals.count++
-      const c = checkinsOf(idx, action.id).get(date)
-      if (!c) continue
-      if (c.status === 'done') {
+      if (occ.status === 'done') {
         totals.done += weight
         totals.doneCount++
-      } else {
+      } else if (occ.status === 'skipped') {
         totals.skipped += weight
       }
     }
@@ -663,14 +668,17 @@ export function buildDayDetail(
     for (const action of actionsOf(idx, goal.id)) {
       const checkins = checkinsOf(idx, action.id)
       const checkin = checkins.get(date)
-      const wasDue = isScheduled(action, date, freezes)
+      const occ = occurrenceOn(action, date, today, checkins, freezes)
       const once = action.cadence_type === 'once'
+      // A one-time action still pending shows on today, so the checklist
+      // matches the Today list; on a past day it does not, because a task due
+      // next week was not owed back then (§6).
       const pendingOnce =
-        once && isToday && !frozen && action.created_at <= date && checkins.size === 0
+        once && isToday && !frozen && action.created_at <= date && !onceOccurrence(action, today, checkins, freezes)
 
       // Logged items always show, even if the cadence has since changed —
       // the row describes a real day and the checklist must not hide it.
-      if (!wasDue && !checkin && !pendingOnce) continue
+      if (!occ && !checkin && !pendingOnce) continue
 
       items.push({
         subgoal_id: action.id,
@@ -682,8 +690,8 @@ export function buildDayDetail(
         importance: goal.importance,
         weight: weightOf(goal, action),
         once,
-        status: checkin ? checkin.status : null,
-        wasDue,
+        status: checkin ? checkin.status : occ ? occ.status : null,
+        wasDue: occ !== null,
       })
     }
   }

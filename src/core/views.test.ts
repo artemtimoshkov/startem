@@ -413,19 +413,103 @@ describe('the day detail checklist', () => {
     expect(view.items.map((i) => i.title)).not.toContain('Book a physio')
   })
 
-  it('still shows a one-time action on the past day it was logged', () => {
+  it('shows a one-time action on the past day it was logged, and counts it', () => {
     const s = withOnce()
     s.checkins = [checkin({ subgoal_id: 3, date: '2026-08-19', status: 'done' })]
     const view = buildDayDetail(s, '2026-08-19', TODAY)
     const item = view.items.find((i) => i.title === 'Book a physio')!
     expect(item.status).toBe('done')
-    expect(item.wasDue).toBe(false)
+    // Its one occurrence lands on that day, so it is genuinely part of it.
+    expect(item.wasDue).toBe(true)
+    expect(view.total).toBe(5 + 4) // Gym 4 + Deep work 1 + physio 4
+    expect(view.done).toBe(4)
+  })
+
+  it('shows an overdue one-time action on the deadline it blew past', () => {
+    const s = withOnce()
+    s.subgoals[2]!.due_date = '2026-08-19'
+    const view = buildDayDetail(s, '2026-08-19', TODAY)
+    const item = view.items.find((i) => i.title === 'Book a physio')!
+    expect(item.status).toBeNull()
+    expect(item.wasDue).toBe(true)
   })
 
   it('is editable within 182 days and never in the future', () => {
     expect(buildDayDetail(twoAreas(), addDays(TODAY, -182), TODAY).editable).toBe(true)
     expect(buildDayDetail(twoAreas(), addDays(TODAY, -183), TODAY).editable).toBe(false)
     expect(buildDayDetail(twoAreas(), addDays(TODAY, 1), TODAY).editable).toBe(false)
+  })
+})
+
+describe('a completed one-time action moves the calendar and the star', () => {
+  function withOnce(over: Partial<import('./types').Subgoal> = {}) {
+    const s = twoAreas()
+    s.subgoals.push(
+      subgoal({
+        id: 3,
+        goal_id: 1, // Health, high → weight 4
+        title: 'Book a physio',
+        cadence_type: 'once',
+        ...over,
+      }),
+    )
+    return s
+  }
+
+  it('moves the star once ticked', () => {
+    const before = buildStar(withOnce(), TODAY).vertices.find((v) => v.name === 'Health')!
+    expect(before.available).toBe(3 * 4) // just the three resolved Wednesdays
+
+    const s = withOnce()
+    s.checkins = [checkin({ subgoal_id: 3, date: TODAY, status: 'done' })]
+    const after = buildStar(s, TODAY).vertices.find((v) => v.name === 'Health')!
+    expect(after.available).toBe(3 * 4 + 4)
+    expect(after.earned).toBe(4)
+    expect(after.score).toBeGreaterThan(before.score!)
+  })
+
+  it('moves the calendar cell for the day it was logged', () => {
+    const s = withOnce()
+    s.checkins = [checkin({ subgoal_id: 3, date: TODAY, status: 'done' })]
+    const cal = buildCalendar(s, TODAY)
+    const cell = cal.weeks.flatMap((w) => w.days).find((d) => d.date === TODAY)!
+    expect(cell.total).toBe(4 + 1 + 4) // Gym + Deep work + physio
+    expect(cell.done).toBe(4)
+    expect(cell.doneCount).toBe(1)
+  })
+
+  it('drags the star down once its deadline passes unresolved', () => {
+    const s = withOnce({ due_date: '2026-08-20' })
+    const health = buildStar(s, TODAY).vertices.find((v) => v.name === 'Health')!
+    expect(health.available).toBe(3 * 4 + 4)
+    expect(health.earned).toBe(0)
+  })
+
+  it('stays out of the score while it is not yet owed', () => {
+    const s = withOnce({ due_date: '2026-12-01' })
+    const health = buildStar(s, TODAY).vertices.find((v) => v.name === 'Health')!
+    expect(health.available).toBe(3 * 4)
+  })
+
+  it('marks an overdue item in the Today list', () => {
+    const s = withOnce({ due_date: '2026-08-20' })
+    const item = buildToday(s, TODAY).items.find((i) => i.title === 'Book a physio')!
+    expect(item.overdue).toBe(true)
+    expect(item.status).toBeNull()
+    const notYet = buildToday(withOnce({ due_date: '2026-12-01' }), TODAY).items.find(
+      (i) => i.title === 'Book a physio',
+    )!
+    expect(notYet.overdue).toBe(false)
+  })
+
+  it('shows in the per-goal grid on its occurrence day', () => {
+    const s = withOnce()
+    s.checkins = [checkin({ subgoal_id: 3, date: '2026-08-25', status: 'done' })]
+    const grid = buildGoalGrid(s, 1, TODAY)
+    const cell = grid.weeks.flatMap((w) => w.days).find((d) => d.date === '2026-08-25')!
+    // A Tuesday: nothing recurring is due, so the one-time action is the day.
+    expect(cell.due).toBe(1)
+    expect(cell.state).toBe('done')
   })
 })
 

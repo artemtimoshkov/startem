@@ -8,6 +8,7 @@
 
 import type {
   Checkin,
+  CheckinStatus,
   Freeze,
   Goal,
   Importance,
@@ -289,6 +290,85 @@ export type CheckinsByDate = ReadonlyMap<ISODate, Checkin>
 
 const NO_CHECKINS: CheckinsByDate = new Map()
 
+/** One occurrence of an action on one day, and how it resolved. */
+export interface Occurrence {
+  date: ISODate
+  /** null means unresolved — pending today, a miss in the past. */
+  status: CheckinStatus | null
+}
+
+/**
+ * The single occurrence a one-time action ever has, or null (§4).
+ *
+ * A one-time action never recurs, so `isScheduled` is false for it on every
+ * date. It still earns and loses weight though — "a win once completed, a
+ * standing miss once its deadline passes, and simply not yet owed before
+ * then" — so it gets exactly one occurrence, on one effective date:
+ *
+ * - **completed or crossed out** → the day it was actually logged;
+ * - **unresolved with a deadline that has passed** → that deadline;
+ * - **unresolved and due today, or with no deadline at all** → none, because
+ *   today is pending and a deadline-free task never counts against anything.
+ *
+ * The occurrence is then windowed like any other, so a win ages out of the
+ * star after 28 days rather than propping it up forever.
+ */
+export function onceOccurrence(
+  action: Subgoal,
+  today: ISODate,
+  checkins: CheckinsByDate = NO_CHECKINS,
+  freezes: readonly Freeze[] = [],
+): Occurrence | null {
+  if (action.cadence_type !== 'once') return null
+  if (action.deleted || action.archived) return null
+
+  // Logged: the day the work actually happened. There should only ever be one
+  // row, but the latest wins if an older store managed to write two.
+  let logged: Checkin | undefined
+  for (const c of checkins.values()) {
+    if (c.date < action.created_at) continue
+    if (c.date > today) continue
+    if (!logged || c.date > logged.date) logged = c
+  }
+  if (logged) {
+    if (isFrozenOn(logged.date, freezes)) return null
+    return { date: logged.date, status: logged.status }
+  }
+
+  const due = action.due_date
+  if (
+    due != null &&
+    due < today && // due today is still pending, not failed
+    due >= action.created_at &&
+    !isFrozenOn(due, freezes)
+  ) {
+    return { date: due, status: null }
+  }
+  return null
+}
+
+/**
+ * Does this action have an occurrence on this date, and how did it resolve?
+ *
+ * The one entry point that covers both recurring cadences and the one-time
+ * exception, so the calendar, the grid and the day detail all agree.
+ */
+export function occurrenceOn(
+  action: Subgoal,
+  date: ISODate,
+  today: ISODate,
+  checkins: CheckinsByDate = NO_CHECKINS,
+  freezes: readonly Freeze[] = [],
+): Occurrence | null {
+  if (action.cadence_type === 'once') {
+    const occ = onceOccurrence(action, today, checkins, freezes)
+    return occ && occ.date === date ? occ : null
+  }
+  if (!isScheduled(action, date, freezes)) return null
+  const c = checkins.get(date)
+  return { date, status: c ? c.status : null }
+}
+
 /**
  * Range mode: only what genuinely came due inside `[from, to]` (§5).
  *
@@ -306,8 +386,17 @@ export function tallyRange(
   checkins: CheckinsByDate = NO_CHECKINS,
   freezes: readonly Freeze[] = [],
 ): Tally {
-  const tally = emptyTally()
   const last = to < today ? to : today
+
+  // A one-time action has one occurrence on one effective date rather than a
+  // cadence to walk, so it is counted directly (§4).
+  if (action.cadence_type === 'once') {
+    const occ = onceOccurrence(action, today, checkins, freezes)
+    if (!occ || occ.date < from || occ.date > last) return emptyTally()
+    return { earned: occ.status === 'done' ? weight : 0, available: weight }
+  }
+
+  const tally = emptyTally()
   for (let d = from; d <= last; d = addDays(d, 1)) {
     if (!isScheduled(action, d, freezes)) continue
     const c = checkins.get(d)
@@ -334,8 +423,9 @@ export function lookbackFor(action: Subgoal): number {
  * Standing mode: where this action stands *now* (§5) — used by the star and
  * the goal percentages.
  *
- * Weekly actions read the plain 28-day window: every weekday falls exactly
- * four times inside it, so nothing can drop out. Monthly and quarterly ones
+ * Weekly actions — and the single occurrence of a one-time one — read the
+ * plain 28-day window: every weekday falls exactly four times inside it, so
+ * nothing can drop out. Monthly and quarterly ones
  * can have no due date at all inside 28 days, so instead their *most recent*
  * due instance represents them, found by scanning back day by day until the
  * first hit — up to 45 days (monthly) or 115 (quarterly). Today with no
@@ -349,8 +439,7 @@ export function tallyStanding(
   checkins: CheckinsByDate = NO_CHECKINS,
   freezes: readonly Freeze[] = [],
 ): Tally {
-  if (action.cadence_type === 'once') return emptyTally()
-  if (action.cadence_type === 'weekly') {
+  if (action.cadence_type === 'weekly' || action.cadence_type === 'once') {
     const from = addDays(today, -(SCORING_WINDOW_DAYS - 1))
     return tallyRange(action, weight, from, today, today, checkins, freezes)
   }
