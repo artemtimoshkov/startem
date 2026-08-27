@@ -1,9 +1,8 @@
-/** View 4 — the per-goal tracker grid — plus the goal editor (SPEC.md §6, §7). */
+/** The goal screen — its tasks and freeze history — plus the goal editor (SPEC.md §6, §7). */
 
 import { useState } from 'react'
 import {
   actionRate,
-  buildGoalGrid,
   goalRate,
   isFrozenOn,
   taskRepeatLabel,
@@ -11,7 +10,6 @@ import {
 } from '../core'
 import { deleteGoal, freezeGoal, saveGoal, unfreezeGoal } from '../db/repo'
 import { useSnapshot } from './DataContext'
-import { GoalGrid } from './charts'
 import {
   ImportanceDot,
   InlineConfirm,
@@ -24,7 +22,7 @@ import { TaskComposer } from './TaskComposer'
 import { navigate } from './router'
 
 export function GoalScreen({ goalId }: { goalId: number }) {
-  const { snapshot, index, today } = useSnapshot()
+  const { index, today } = useSnapshot()
   const goal = index.goalById.get(goalId)
   const [confirming, setConfirming] = useState(false)
   const [composing, setComposing] = useState(false)
@@ -42,7 +40,6 @@ export function GoalScreen({ goalId }: { goalId: number }) {
 
   const area = index.areaById.get(goal.area_id)
   const frozen = goal.status === 'frozen'
-  const grid = buildGoalGrid(snapshot, goalId, today)
   const rate = goalRate(index, goal)
   const tasks = index.subgoalsByGoal.get(goalId) ?? []
   const periods = (index.freezesByGoal.get(goalId) ?? []).filter((f) => !f.deleted)
@@ -87,11 +84,6 @@ export function GoalScreen({ goalId }: { goalId: number }) {
             Frozen — out of scoring entirely, and these days will never count as misses.
           </p>
         ) : null}
-      </div>
-
-      <div className="card card-pad">
-        <p className="card-title">Last 15 weeks</p>
-        <GoalGrid grid={grid} />
       </div>
 
       <p className="section-label">Tasks</p>

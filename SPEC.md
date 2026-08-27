@@ -1,4 +1,4 @@
-# Startem Build Spec — v2.4, 26 August 2026
+# Startem Build Spec — v2.5, 27 August 2026
 
 Everything needed to rebuild the app from nothing: every field, every scheduling rule, the scoring maths, the mistakes already paid for once — and the decided stack it ships on.
 
@@ -293,9 +293,11 @@ So 0% → **1.0** and 100% → **10.0**. The floor is 1 because a 1–10 chart c
 
 Excluded from every score, absent from the todo list along with every task under them, and their frozen days never count as misses. History is preserved and unfreezing restores everything. Freezing is a goal-level idea, so a task attached straight to an area has nothing that can freeze it. An area whose goals are *all* frozen still scores whatever its goal-less tasks earn; with none of those it scores null, not zero.
 
-## 6. The five derived views
+## 6. The derived views
 
-All five are pure functions of the stored rows plus today's date. None of them needs storing.
+All of them are pure functions of the stored rows plus today's date. None of them needs storing.
+
+Three of the five are **built but not surfaced** as of v2.5 — the weekly strip, the per-goal grid and the day-by-day calendar. Their builders and tests stay in `src/core` untouched, because the rules below are the expensive part and none of them changed; what was removed is the screens that drew them. Anything reading this to rebuild the app should treat those three as specified and shelved, not as deleted.
 
 ### The task list
 
@@ -314,13 +316,13 @@ angle(i) = -90° + (360° / count) * i
 radius(i) = R * score(i) / 10
 ```
 
-### Weekly history strip
+### Weekly history strip — *shelved, not surfaced*
 
-**8** calendar weeks, Monday-start, one bar per week, using *range* mode. The current week is scored on the days resolved so far. Weeks with nothing due render flat rather than empty, so a gap is visibly different from a zero.
+`buildWeeklyStrip` still computes it. **8** calendar weeks, Monday-start, one bar per week, using *range* mode. The current week is scored on the days resolved so far. Weeks with nothing due render flat rather than empty, so a gap is visibly different from a zero.
 
-### Per-goal tracker grid
+### Per-goal tracker grid — *shelved, not surfaced*
 
-**15** weeks of day cells for a single goal. Cell states:
+`buildGoalGrid` still computes it. **15** weeks of day cells for a single goal. Cell states:
 
 | State | When |
 |---|---|
@@ -332,9 +334,9 @@ radius(i) = R * score(i) / 10
 | frozen | The goal was frozen that day. |
 | future | Hasn't happened. |
 
-### Day-by-day calendar
+### Day-by-day calendar — *shelved, not surfaced*
 
-**26** weeks across every live task, Monday-aligned columns, ending with the week containing today. Each day carries weighted totals: `total`, `done`, `skipped`, `count`, `doneCount`, `ratio`. Colour runs in five bands from "nothing logged" through to "everything logged".
+`buildCalendar`, `buildDayDetail` and `canEditDay` still compute it, and the `/calendar` route and its tab are gone. **26** weeks across every live task, Monday-aligned columns, ending with the week containing today. Each day carries weighted totals: `total`, `done`, `skipped`, `count`, `doneCount`, `ratio`. Colour runs in five bands from "nothing logged" through to "everything logged".
 
 Hovering a day shows tasks completed and the weighted amount. Clicking opens that day as an editable checklist.
 
@@ -348,9 +350,10 @@ The day detail view includes pending items — it's a checklist, so it must show
 |---|---|
 | Tick an item | Writes `done`. Ticking again clears the row back to unresolved. |
 | Cross out an item | Writes `skipped` — an immediate miss. Reversible; restoring returns it to pending. |
-| Back-date | Any day within **182 days** (26 weeks) can be edited. Anything visible in the calendar is correctable; future dates never are. |
+| Back-date | **No surface as of v2.5** — the day screen was the only one, and it went with the calendar. The rule it enforced still stands in `canEditDay` for whatever brings it back: any day within **182 days** (26 weeks) is correctable, and a future day never is. |
 | Freeze / unfreeze a goal | Opens or closes a freeze period, and flips `status`. |
 | Add a task | The composer: a line to type into, and chips for **where** (area, and a goal inside it or none), **when** (date → calendar, shortcuts, time, repeat) and **priority**. Typing `p1` / `p2` / `p3` sets the priority and leaves the title. |
+| Pick a date | The date sheet offers **Today**, **Tomorrow**, **This weekend** (the coming Saturday, or today when today is a Saturday or a Sunday) and **No date**, then a month grid. Picking a day **does not close the sheet** — it turns that day red and leaves Time and Repeat, which live in the same sheet's footer, one tap away. The sheet closes on the backdrop, the ✕ or Escape. |
 | Edit a task | The same composer, opened on the task. There is no second form to keep in step with the first. |
 | Archive a task | Removes it from the interface; the row and its check-ins stay. |
 | Create / edit a goal | Title, area, description. Goals are created from the **area screen**, or on the spot from the composer's area picker — never as a side effect of adding a task. |
@@ -499,7 +502,7 @@ startem/
     core/          # score, state, rows — pure, imports nothing
     db/            # Dexie schema, one store per table
     sync/          # outbox, push/pull loop, session handling
-    ui/            # React: Today, Star, Calendar, Goal editor
+    ui/            # React: Tasks, Star, Goal, Settings
   public/          # icons 180/192/512 + maskable (all PNG)
   scripts/         # make-icons.mjs — rasterises the icons, so the PNGs
                    # are generated from one definition rather than hand-made

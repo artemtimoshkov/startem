@@ -170,6 +170,17 @@ await step('crossing out shrinks the target', async () => {
   await page.waitForTimeout(300)
 })
 
+await step('the tab bar has no calendar in it', async () => {
+  const tabs = await page.$$eval('.tab', (els) => els.map((el) => el.getAttribute('href')))
+  if (tabs.includes('/calendar')) throw new Error('the calendar tab is still there')
+  if (tabs.length !== 3) throw new Error(`${tabs.length} tabs: ${tabs.join(', ')}`)
+  // And the route itself is gone, not merely unlinked.
+  await page.goto(`${BASE}/calendar`, { waitUntil: 'networkidle' })
+  const body = await page.textContent('.screen')
+  if (!body.includes('Nothing here')) throw new Error('/calendar still renders a screen')
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+})
+
 await step('star renders with scores and one em dash', async () => {
   await page.click('.tab[href="/star"]')
   await page.waitForSelector('.star-svg')
@@ -179,11 +190,6 @@ await step('star renders with scores and one em dash', async () => {
   console.log('      ' + desc.slice(0, 150))
 })
 
-await step('weekly strip renders 8 bars', async () => {
-  const bars = await page.$$('.strip-col')
-  if (bars.length !== 8) throw new Error(`${bars.length} bars`)
-})
-
 await step('clicking a vertex opens the area', async () => {
   await page.click('.star-vertex')
   await page.waitForSelector('.backlink')
@@ -191,29 +197,13 @@ await step('clicking a vertex opens the area', async () => {
   console.log(`      opened area: ${h}`)
 })
 
-await step('goal screen shows the 15-week grid and task percentages', async () => {
+await step('goal screen lists its tasks, with no day grid above them', async () => {
   await page.goto(`${BASE}/goals/41`, { waitUntil: 'networkidle' })
-  await page.waitForSelector('text=Last 15 weeks')
-  const weeks = await page.$$('.card .dg-rows')
-  if (weeks.length !== 15) throw new Error(`${weeks.length} week columns`)
+  await page.waitForSelector('.row-button')
+  if (await page.$('.daygrid')) throw new Error('the 15-week grid is still on the goal')
   const body = await page.textContent('.screen')
   if (!body.includes('Gym session')) throw new Error('tasks missing')
   if (body.includes('Old warm-up')) throw new Error('archived task shown')
-})
-
-await step('day grids open anchored at the newest week', async () => {
-  for (const [name, url] of [['goal grid', '/goals/41'], ['calendar', '/calendar']]) {
-    await page.goto(BASE + url, { waitUntil: 'networkidle' })
-    await page.waitForSelector('.daygrid-scroll')
-    await page.waitForTimeout(250)
-    const r = await page.evaluate(() => {
-      const el = document.querySelector('.daygrid-scroll')
-      return { left: Math.round(el.scrollLeft), max: Math.round(el.scrollWidth - el.clientWidth) }
-    })
-    if (r.max > 0 && r.left < r.max - 1) throw new Error(`${name} at ${r.left} of ${r.max}`)
-    console.log(`      ${name}: scrollLeft ${r.left} of ${r.max}`)
-  }
-  await page.goto(BASE + '/goals/41', { waitUntil: 'networkidle' })
 })
 
 await step('freeze then unfreeze a goal', async () => {
@@ -223,36 +213,6 @@ await step('freeze then unfreeze a goal', async () => {
   if (!body.includes('Frozen')) throw new Error('no frozen indication')
   await page.click('text=Unfreeze goal')
   await page.waitForSelector('text=Freeze goal', { timeout: 5000 })
-})
-
-await step('calendar renders 26 weeks and opens a day', async () => {
-  await page.click('.tab[href="/calendar"]')
-  await page.waitForSelector('.daygrid')
-  const weeks = await page.$$('.dg-rows')
-  if (weeks.length !== 26) throw new Error(`${weeks.length} week columns`)
-  const cells = await page.$$('.dg-cell.clickable')
-  if (cells.length < 150) throw new Error(`${cells.length} editable cells`)
-  await page.click('.dg-cell.is-today')
-  await page.waitForSelector('.backlink')
-  console.log(`      day opened: ${await page.textContent('h1')}`)
-})
-
-await step('back-dating a past day works', async () => {
-  await page.goto(`${BASE}/calendar/2026-08-19`, { waitUntil: 'networkidle' })
-  await page.waitForSelector('.row-title')
-  const before = await page.textContent('.progress-head .big')
-  await page.click('.row:first-of-type .check:not(.cross)')
-  await page.waitForTimeout(400)
-  const after = await page.textContent('.progress-head .big')
-  if (before === after) throw new Error(`ratio unchanged at ${before}`)
-  console.log(`      2026-08-19 ratio ${before.trim()} -> ${after.trim()}`)
-})
-
-await step('a day older than 182 days is not editable', async () => {
-  await page.goto(`${BASE}/calendar/2025-01-01`, { waitUntil: 'networkidle' })
-  await page.waitForSelector('.screen')
-  const body = await page.textContent('.screen')
-  if (!body.includes('outside the editable window')) throw new Error('no lockout notice')
 })
 
 await step('create a goal through the editor — a heading, with no priority on it', async () => {
@@ -285,9 +245,7 @@ await step('a repeat picked from the date sheet reads back in words', async () =
   await page.click('.chip:has-text("Date")')
   await page.waitForSelector('.cal')
   await page.click('.sheet-row:has-text("This weekend")')
-  await page.waitForSelector('.sheet', { state: 'detached' })
-  await page.click('.chip.is-set')
-  await page.waitForSelector('.sheet-foot-row button:has-text("Repeat")')
+  await page.waitForTimeout(150)
   await page.click('.sheet-foot-row button:has-text("Repeat")')
   await page.waitForSelector('.sheet-row:has-text("Every week on Saturday")')
   await page.click('.sheet-row:has-text("Every week on Saturday")')
@@ -319,8 +277,7 @@ await step('a custom repeat stores its interval and its inclusive end date', asy
   await page.click('.chip:has-text("Date")')
   await page.waitForSelector('.cal')
   await page.click('.sheet-row:has-text("Tomorrow")')
-  await page.waitForSelector('.sheet', { state: 'detached' })
-  await page.click('.chip.is-set')
+  await page.waitForTimeout(150)
   await page.click('.sheet-foot-row button:has-text("Repeat")')
   await page.waitForSelector('.sheet-row:has-text("Custom")')
   await page.click('.sheet-row:has-text("Custom")')
@@ -344,6 +301,41 @@ await step('a custom repeat stores its interval and its inclusive end date', asy
   })
   if (stored.interval !== 4) throw new Error(`interval ${stored.interval}`)
   if (stored.repeat_until !== '2026-12-31') throw new Error(`until ${stored.repeat_until}`)
+})
+
+await step('the date sheet stays open on a pick, and marks the day', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.click('.add-task')
+  await page.fill('.composer-input', 'Sheet stays open')
+  await page.click('.chip:has-text("Date")')
+  await page.waitForSelector('.cal')
+
+  // Next week is gone; the other three shortcuts and No date stay.
+  const rows = await page.$$eval('.sheet-body .sheet-row', (els) =>
+    els.map((el) => el.querySelector('.sheet-row-label').textContent),
+  )
+  if (rows.includes('Next week')) throw new Error('Next week is still offered')
+  for (const want of ['Today', 'Tomorrow', 'This weekend', 'No date']) {
+    if (!rows.includes(want)) throw new Error(`${want} is missing`)
+  }
+
+  await page.click('.sheet-row:has-text("Tomorrow")')
+  await page.waitForTimeout(150)
+  if (!(await page.$('.sheet'))) throw new Error('the sheet closed on a pick')
+
+  // The chosen day is marked in the month grid, and picking again from the
+  // grid still leaves the sheet up.
+  const picked = await page.$$('.cal-day.is-picked')
+  if (picked.length !== 1) throw new Error(`${picked.length} days highlighted`)
+  await page.click('.cal-day:not(.is-outside):not(.is-picked) >> nth=20')
+  await page.waitForTimeout(150)
+  if (!(await page.$('.sheet'))) throw new Error('the sheet closed on a grid pick')
+  if ((await page.$$('.cal-day.is-picked')).length !== 1) throw new Error('highlight did not move')
+
+  // Dismissed by the backdrop, as before.
+  await page.click('.sheet-scrim', { position: { x: 5, y: 5 } })
+  await page.waitForSelector('.sheet', { state: 'detached' })
+  await page.click('.composer-cancel')
 })
 
 await step('a task can be attached to an area with no goal at all', async () => {
@@ -517,8 +509,6 @@ await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
 if (SHOTS) await page.screenshot({ path: `${SHOTS}/shot-today.png`, fullPage: true })
 await page.goto(`${BASE}/star`, { waitUntil: 'networkidle' })
 if (SHOTS) await page.screenshot({ path: `${SHOTS}/shot-star.png`, fullPage: true })
-await page.goto(`${BASE}/calendar`, { waitUntil: 'networkidle' })
-if (SHOTS) await page.screenshot({ path: `${SHOTS}/shot-calendar.png`, fullPage: true })
 
 await browser.close()
 server.close()

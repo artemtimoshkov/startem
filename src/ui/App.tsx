@@ -6,7 +6,6 @@ import { RouterProvider, Link, useMatch } from './router'
 import { TaskScreen, TasksScreen } from './Tasks'
 import { AreaScreen, StarScreen } from './Star'
 import { GoalEditorScreen, GoalScreen } from './Goal'
-import { CalendarScreen, DayScreen } from './Calendar'
 import { SettingsScreen } from './Settings'
 import { ServiceWorkerNotice } from './serviceWorker'
 
@@ -19,8 +18,6 @@ const ROUTES = [
   '/goals/new',
   '/goals/:id',
   '/goals/:id/edit',
-  '/calendar',
-  '/calendar/:date',
   '/settings',
 ]
 
@@ -74,10 +71,6 @@ function Screens() {
       return <GoalScreen goalId={Number(hit.params['id'])} />
     case '/goals/:id/edit':
       return <GoalEditorScreen goalId={Number(hit.params['id'])} />
-    case '/calendar':
-      return <CalendarScreen />
-    case '/calendar/:date':
-      return <DayScreen date={hit.params['date']!} />
     case '/settings':
       return <SettingsScreen />
     default:
@@ -107,20 +100,25 @@ function TabBar() {
           </svg>
           Star
         </Link>
-        <Link to="/calendar" className="tab">
-          <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6">
-            <rect x="3" y="4.5" width="14" height="12" rx="2" />
-            <path d="M3 8.5h14M7 3.5v2M13 3.5v2" strokeLinecap="round" />
-          </svg>
-          Calendar
-        </Link>
         <Link to="/settings" className="tab">
-          <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6">
-            <circle cx="10" cy="10" r="2.6" />
-            <path
-              d="M10 3v1.6M10 15.4V17M3 10h1.6M15.4 10H17M5.1 5.1l1.1 1.1M13.8 13.8l1.1 1.1M14.9 5.1l-1.1 1.1M6.2 13.8l-1.1 1.1"
-              strokeLinecap="round"
-            />
+          {/*
+            A cog, not a sun. The distinction is that the teeth are part of the
+            body's outline — one closed path stepping between a root radius of
+            6 and a tip radius of 8.2, eight times — rather than separate marks
+            floating outside a circle, which is what made the old icon read as
+            rays. Generated, then pasted: the arithmetic is not worth carrying
+            into the bundle for one 20px icon.
+          */}
+          <svg
+            viewBox="0 0 20 20"
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          >
+            <path d="M8.55 4.18L8.78 1.89L11.22 1.89L11.45 4.18L13.09 4.86L14.87 3.4L16.6 5.13L15.14 6.91L15.82 8.55L18.11 8.78L18.11 11.22L15.82 11.45L15.14 13.09L16.6 14.87L14.87 16.6L13.09 15.14L11.45 15.82L11.22 18.11L8.78 18.11L8.55 15.82L6.91 15.14L5.13 16.6L3.4 14.87L4.86 13.09L4.18 11.45L1.89 11.22L1.89 8.78L4.18 8.55L4.86 6.91L3.4 5.13L5.13 3.4L6.91 4.86Z" />
+            <circle cx="10" cy="10" r="2.9" />
           </svg>
           Settings
         </Link>

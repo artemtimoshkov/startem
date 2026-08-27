@@ -1,22 +1,20 @@
-/** Views 2 and 3 — the star and the weekly history strip (SPEC.md §6). */
+/** View 2 — the star, and the areas beneath it (SPEC.md §6). */
 
 import {
   actionRate,
   buildStar,
-  buildWeeklyStrip,
   goalRate,
   taskRepeatLabel,
   type Goal,
 } from '../core'
 import { useSnapshot } from './DataContext'
-import { CalendarGrid, GoalGrid, RadarChart, WeeklyStrip } from './charts'
+import { RadarChart } from './charts'
 import { ListLink, Percent, ScoreBadge, Stripe, TopBar } from './bits'
 import { navigate } from './router'
 
 export function StarScreen() {
   const { snapshot, index, today } = useSnapshot()
   const star = buildStar(snapshot, today)
-  const bars = buildWeeklyStrip(snapshot, today)
 
   return (
     <div className="screen">
@@ -24,11 +22,6 @@ export function StarScreen() {
 
       <div className="card card-pad">
         <RadarChart star={star} onSelect={(id) => navigate(`/areas/${id}`)} />
-      </div>
-
-      <div className="card card-pad">
-        <p className="card-title">Last 8 weeks</p>
-        <WeeklyStrip bars={bars} />
       </div>
 
       <p className="section-label">Areas</p>
@@ -189,5 +182,3 @@ function GoalRow({ goal }: { goal: Goal }) {
     </ListLink>
   )
 }
-
-export { GoalGrid, CalendarGrid }
