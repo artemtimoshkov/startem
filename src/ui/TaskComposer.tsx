@@ -510,13 +510,9 @@ function WherePicker({
 
 /** The coming Saturday, or today when today *is* Saturday. */
 function thisWeekend(today: ISODate): ISODate {
-  return addDays(today, (5 - dow(today) + 7) % 7)
-}
-
-/** The next Monday, always strictly ahead. */
-function nextWeek(today: ISODate): ISODate {
-  const delta = (7 - dow(today)) % 7
-  return addDays(today, delta === 0 ? 7 : delta)
+  // Sunday is still the weekend, so on a Sunday the shortcut means today —
+  // not a Saturday six days out. Every other day walks forward to Saturday.
+  return dow(today) === 6 ? today : addDays(today, (5 - dow(today) + 7) % 7)
 }
 
 function DatePicker({
@@ -542,16 +538,16 @@ function DatePicker({
     year: 'numeric',
   })
 
+  /**
+   * Picking a date does **not** close the sheet.
+   *
+   * The date is usually only half the answer — a time or a repeat follows, and
+   * both of those live in this sheet's footer. Closing on the first tap threw
+   * the other two away and made the user reopen the chip to get back. The
+   * chosen day turns red instead, and the sheet waits to be dismissed (§7).
+   */
   const shortcut = (label: string, date: ISODate | null, hint: string) => (
-    <SheetRow
-      label={label}
-      hint={hint}
-      selected={value.date === date}
-      onClick={() => {
-        onPick(date)
-        onClose()
-      }}
-    />
+    <SheetRow label={label} hint={hint} selected={value.date === date} onClick={() => onPick(date)} />
   )
 
   return (
@@ -580,7 +576,6 @@ function DatePicker({
         thisWeekend(today),
         formatDate(thisWeekend(today), { day: undefined, month: undefined }),
       )}
-      {shortcut('Next week', nextWeek(today), formatDate(nextWeek(today)))}
       {shortcut('No date', null, '')}
 
       <div className="cal">
@@ -629,10 +624,7 @@ function DatePicker({
                 className={cls}
                 aria-pressed={date === value.date}
                 aria-label={formatDate(date, { year: 'numeric' })}
-                onClick={() => {
-                  onPick(date)
-                  onClose()
-                }}
+                onClick={() => onPick(date)}
               >
                 {dayOfMonth(date)}
               </button>
