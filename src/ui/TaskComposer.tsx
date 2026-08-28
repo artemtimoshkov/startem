@@ -137,6 +137,17 @@ export function readPriorityToken(
 // The composer
 // ---------------------------------------------------------------------------
 
+/**
+ * What a new task opens on.
+ *
+ * P3, not the middle of the scale: most of what gets typed in is ordinary, and
+ * a default of P2 (weight 2) meant every routine task quietly counted double a
+ * genuinely small one until it was corrected by hand. Starting at the floor
+ * makes raising the priority the deliberate act, which is the one worth a tap.
+ * Editing an existing task still opens on whatever that task already carries.
+ */
+const DEFAULT_IMPORTANCE: Importance = 'low'
+
 type Picker = 'where' | 'date' | 'repeat' | 'time' | 'priority'
 
 export function TaskComposer({
@@ -157,7 +168,7 @@ export function TaskComposer({
     title: '',
     area_id: initial?.area_id ?? index.areas[0]?.id ?? 1,
     goal_id: initial?.goal_id ?? null,
-    importance: initial?.importance ?? 'medium',
+    importance: initial?.importance ?? DEFAULT_IMPORTANCE,
     date: initial?.date ?? null,
     time: initial?.time ?? null,
     repeat: initial?.repeat ?? noRepeat(),

@@ -14,7 +14,6 @@ import {
   createGoal,
   deleteGoal,
   ensureSeeded,
-  exportSnapshot,
   freezeGoal,
   importSnapshot,
   loadSnapshot,
@@ -320,7 +319,7 @@ describe('areas', () => {
   })
 })
 
-describe('the migration import', () => {
+describe('the snapshot importer — the sample loader\'s engine', () => {
   const exported = {
     areas: [{ id: 3, name: 'Work', position: 2 }],
     goals: [
@@ -375,9 +374,9 @@ describe('the migration import', () => {
     ).resolves.toMatchObject({ areas: 1 })
   })
 
-  it('round-trips through the export', async () => {
+  it('round-trips through a dump of the store', async () => {
     await importSnapshot(exported, TODAY)
-    const dumped = await exportSnapshot()
+    const dumped = await loadSnapshot()
     await importSnapshot(dumped, TODAY)
     expect((await db.goals.toArray()).map((g) => g.id)).toEqual([41])
     expect((await db.subgoals.get(108))?.monthly_day).toBe(28)
@@ -429,9 +428,9 @@ describe('id allocation', () => {
     expect(second).not.toBe(first)
   })
 
-  it('does not re-mint ids that an import brought back from this device', async () => {
+  it('does not re-mint ids that a reload brought back from this device', async () => {
     const goalId = await mint()
-    const dumped = await exportSnapshot()
+    const dumped = await loadSnapshot()
     await importSnapshot(dumped, TODAY)
     const next = await mint()
     expect(next).not.toBe(goalId)

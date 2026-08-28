@@ -2,23 +2,25 @@
  * End-to-end smoke test — the checks that unit tests cannot make.
  *
  * Everything here is about the real browser: that IndexedDB really keeps the
- * ids an import brought in, that a tick really moves the star, that removing an
- * action really archives rather than deletes, that a deep link really survives
- * a refresh. Milestone 3 needs a browser anyway to prove the service worker
- * opens with no network, so this is where that will go too.
+ * ids the sample loader brought in, that a tick really moves the star, that
+ * removing an action really archives rather than deletes, that a deep link
+ * really survives a refresh. Milestone 3 needs a browser anyway to prove the
+ * service worker opens with no network, so this is where that will go too.
  *
- *   npm run build && npm run e2e
+ *   npm run build:e2e && npm run e2e
+ *
+ * `build:e2e` is the ordinary build with `VITE_SEED_SAMPLE=1`, which loads
+ * `migration/sample-export.json` into an empty store on boot. That is how these
+ * checks get data to assert against now that the JSON import screen is gone.
  *
  * Chromium comes from Playwright's own download, or from
  * CHROMIUM_PATH if the environment provides one.
  */
 
 import { chromium } from 'playwright'
-import { readFileSync } from 'node:fs'
 import { serve } from './serve.mjs'
 
 const BASE = process.env.BASE ?? 'http://localhost:4173'
-const FIXTURES = new URL('../migration/', import.meta.url).pathname
 const SHOTS = process.env.SHOTS ?? null
 const errors = []
 const server = await serve(Number(new URL(BASE).port || 80))
@@ -44,16 +46,12 @@ await step('tasks screen renders with default areas', async () => {
   if (!(await page.$('.add-task'))) throw new Error('no Add task button')
 })
 
-await step('import the JSON export', async () => {
-  await page.click('.tab[href="/settings"]')
-  await page.waitForSelector('text=Import / export')
-  await page.setInputFiles('input[type=file]', `${FIXTURES}sample-export.json`)
-  await page.waitForSelector('text=Replace my data')
-  await page.click('text=Replace my data')
-  await page.waitForSelector('text=Imported 10 areas', { timeout: 8000 })
+await step('the sample dataset seeds an empty store', async () => {
+  // A seeded preview build, not an import screen — see the header note.
+  await page.waitForSelector('.row-title', { timeout: 8000 })
 })
 
-await step('ids preserved through the import', async () => {
+await step('ids preserved through the load', async () => {
   const ids = await page.evaluate(async () => {
     const req = indexedDB.open('startem')
     const db = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error) })
@@ -67,7 +65,7 @@ await step('ids preserved through the import', async () => {
   if (JSON.stringify(ids.subgoals) !== JSON.stringify(expectS)) throw new Error(`subgoal ids ${JSON.stringify(ids.subgoals)}`)
 })
 
-await step('monthly_day 31 was clamped to 28 on import', async () => {
+await step('monthly_day 31 was clamped to 28 on the way in', async () => {
   const day = await page.evaluate(async () => {
     const req = indexedDB.open('startem')
     const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
@@ -78,7 +76,7 @@ await step('monthly_day 31 was clamped to 28 on import', async () => {
   if (day !== 28) throw new Error(`monthly_day was ${day}`)
 })
 
-await step('the import moves goal importance down onto the tasks', async () => {
+await step('the loader moves goal importance down onto the tasks', async () => {
   const rows = await page.evaluate(async () => {
     const req = indexedDB.open('startem')
     const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
@@ -104,7 +102,7 @@ await step('the import moves goal importance down onto the tasks', async () => {
   if (guitar.start_date !== '2026-08-12') throw new Error(`start ${guitar.start_date}`)
 })
 
-await step('tasks list shows imported tasks, heaviest first', async () => {
+await step('tasks list shows the sample tasks, heaviest first', async () => {
   await page.click('.tab[href="/"]')
   await page.waitForSelector('.row-title')
   const titles = await page.$$eval('.row-title', (n) => n.map((x) => x.textContent.trim()))
@@ -170,14 +168,17 @@ await step('crossing out shrinks the target', async () => {
   await page.waitForTimeout(300)
 })
 
-await step('the tab bar has no calendar in it', async () => {
+await step('the tab bar has neither a calendar nor a settings tab in it', async () => {
   const tabs = await page.$$eval('.tab', (els) => els.map((el) => el.getAttribute('href')))
   if (tabs.includes('/calendar')) throw new Error('the calendar tab is still there')
-  if (tabs.length !== 3) throw new Error(`${tabs.length} tabs: ${tabs.join(', ')}`)
-  // And the route itself is gone, not merely unlinked.
-  await page.goto(`${BASE}/calendar`, { waitUntil: 'networkidle' })
-  const body = await page.textContent('.screen')
-  if (!body.includes('Nothing here')) throw new Error('/calendar still renders a screen')
+  if (tabs.includes('/settings')) throw new Error('the settings tab is still there')
+  if (tabs.length !== 2) throw new Error(`${tabs.length} tabs: ${tabs.join(', ')}`)
+  // And the routes themselves are gone, not merely unlinked.
+  for (const gone of ['/calendar', '/settings']) {
+    await page.goto(`${BASE}${gone}`, { waitUntil: 'networkidle' })
+    const body = await page.textContent('.screen')
+    if (!body.includes('Nothing here')) throw new Error(`${gone} still renders a screen`)
+  }
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
 })
 
@@ -225,9 +226,22 @@ await step('create a goal through the editor — a heading, with no priority on 
   await page.waitForSelector('h1:has-text("Learn to sail")', { timeout: 6000 })
 })
 
-await step('add a task to the goal through the composer', async () => {
+await step('a new task opens on P3, and the repeat sheet has a way back', async () => {
   await page.click('.add-task')
   await page.waitForSelector('.composer-input')
+  if (!(await page.$('.chip.imp-low'))) throw new Error('a new task did not open on P3')
+  await page.click('.chip:has-text("Date")')
+  await page.waitForSelector('.cal')
+  await page.click('.sheet-foot-row button:has-text("Repeat")')
+  await page.waitForSelector('.sheet-row:has-text("Every day")')
+  // Back returns to the date sheet it was opened from, rather than closing.
+  await page.click('.sheet-foot-row button:has-text("Back")')
+  await page.waitForSelector('.cal', { timeout: 4000 })
+  await page.click('.sheet-close')
+  await page.waitForSelector('.sheet', { state: 'detached' })
+})
+
+await step('add a task to the goal through the composer', async () => {
   await page.fill('.composer-input', 'Sailing lesson p1')
   // The p1 token sets the priority and leaves the title behind.
   const typed = await page.inputValue('.composer-input')
@@ -249,9 +263,9 @@ await step('a repeat picked from the date sheet reads back in words', async () =
   await page.click('.sheet-foot-row button:has-text("Repeat")')
   await page.waitForSelector('.sheet-row:has-text("Every week on Saturday")')
   await page.click('.sheet-row:has-text("Every week on Saturday")')
-  await page.waitForTimeout(200)
-  await page.click('.sheet-close')
-  await page.waitForSelector('.sheet', { state: 'detached' })
+  // Picking a preset is the whole answer, so it closes the pickers outright —
+  // no tap on ✕, and no landing back on the calendar (§7).
+  await page.waitForSelector('.sheet', { state: 'detached', timeout: 4000 })
   await page.click('.composer-submit')
   await page.waitForTimeout(600)
   const stored = await page.evaluate(async () => {
@@ -286,9 +300,8 @@ await step('a custom repeat stores its interval and its inclusive end date', asy
   await page.click('.segmented button:has-text("On date")')
   await page.fill('input[aria-label="Last day, inclusive"]', '2026-12-31')
   await page.click('.sheet-foot-row button:has-text("Save")')
-  await page.waitForTimeout(200)
-  await page.click('.sheet-close')
-  await page.waitForSelector('.sheet', { state: 'detached' })
+  // Save commits the custom repeat the same way a preset does — straight out.
+  await page.waitForSelector('.sheet', { state: 'detached', timeout: 4000 })
   await page.click('.composer-submit')
   await page.waitForTimeout(600)
   const stored = await page.evaluate(async () => {
@@ -404,29 +417,6 @@ await step('deleting a goal detaches its tasks rather than destroying them', asy
   if (rows.gym.goal_id != null) throw new Error(`task still points at the goal: ${rows.gym.goal_id}`)
   if (rows.gym.area_id !== 1) throw new Error(`task lost its area: ${rows.gym.area_id}`)
   if (rows.checkins === 0) throw new Error('check-ins were destroyed with the goal')
-})
-
-await step('export round-trips', async () => {
-  await page.click('.tab[href="/settings"]')
-  await page.waitForSelector('text=Export JSON')
-  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Export JSON')])
-  const path = await dl.path()
-  const data = JSON.parse(readFileSync(path, 'utf8'))
-  for (const t of ['areas','goals','subgoals','checkins','freezes']) {
-    if (!Array.isArray(data[t])) throw new Error(`missing table ${t}`)
-  }
-  if (!data.goals.some(g => g.id === 41)) throw new Error('ids not preserved in export')
-  console.log(`      exported ${data.goals.length} goals, ${data.checkins.length} check-ins`)
-})
-
-await step('rename an area', async () => {
-  await page.fill('#area-2', 'Making things')
-  await page.click('h1')
-  await page.waitForTimeout(500)
-  await page.click('.tab[href="/star"]')
-  await page.waitForSelector('.star-svg')
-  const desc = await page.getAttribute('.star-svg', 'aria-label')
-  if (!desc.includes('Making things')) throw new Error('rename not reflected')
 })
 
 await step('deep link survives a reload', async () => {
