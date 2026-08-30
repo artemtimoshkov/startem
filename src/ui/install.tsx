@@ -134,8 +134,9 @@ function ShareGlyph() {
 }
 
 /**
- * The dismissible card on Today. Hidden once the app is installed, and once
- * dismissed it stays dismissed — Settings keeps a permanent copy.
+ * The dismissible card on Today — the only install surface, now that the
+ * settings screen is gone. Hidden once the app is installed, and once
+ * dismissed it stays dismissed.
  */
 export function InstallCard() {
   const { installed, ios, promptable, install, dismissed, dismiss } = useInstall()
@@ -170,44 +171,5 @@ export function InstallCard() {
         </>
       )}
     </div>
-  )
-}
-
-/** The permanent copy, in Settings. */
-export function InstallSection() {
-  const { installed, ios, promptable, install } = useInstall()
-
-  return (
-    <>
-      <p className="section-label">Install</p>
-      <div className="card card-pad">
-        {installed ? (
-          <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)' }}>
-            Startem is installed on this device and runs full-screen. It opens with no signal.
-          </p>
-        ) : promptable ? (
-          <>
-            <p style={{ margin: '0 0 10px', fontSize: 14, color: 'var(--text-secondary)' }}>
-              Install Startem to open it full-screen and offline.
-            </p>
-            <button type="button" className="btn btn-primary btn-sm" onClick={install}>
-              Install
-            </button>
-          </>
-        ) : ios ? (
-          <>
-            <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)' }}>
-              On iPhone and iPad, Safari installs from the share sheet:
-            </p>
-            <IOSInstructions />
-          </>
-        ) : (
-          <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)' }}>
-            This browser has not offered an install. Chrome, Edge and Safari can all do it —
-            in Safari on iPhone it is Share → Add to Home Screen.
-          </p>
-        )}
-      </div>
-    </>
   )
 }

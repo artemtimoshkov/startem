@@ -137,6 +137,17 @@ export function readPriorityToken(
 // The composer
 // ---------------------------------------------------------------------------
 
+/**
+ * What a new task opens on.
+ *
+ * P3, not the middle of the scale: most of what gets typed in is ordinary, and
+ * a default of P2 (weight 2) meant every routine task quietly counted double a
+ * genuinely small one until it was corrected by hand. Starting at the floor
+ * makes raising the priority the deliberate act, which is the one worth a tap.
+ * Editing an existing task still opens on whatever that task already carries.
+ */
+const DEFAULT_IMPORTANCE: Importance = 'low'
+
 type Picker = 'where' | 'date' | 'repeat' | 'time' | 'priority'
 
 export function TaskComposer({
@@ -157,7 +168,7 @@ export function TaskComposer({
     title: '',
     area_id: initial?.area_id ?? index.areas[0]?.id ?? 1,
     goal_id: initial?.goal_id ?? null,
-    importance: initial?.importance ?? 'medium',
+    importance: initial?.importance ?? DEFAULT_IMPORTANCE,
     date: initial?.date ?? null,
     time: initial?.time ?? null,
     repeat: initial?.repeat ?? noRepeat(),
@@ -324,9 +335,10 @@ export function TaskComposer({
           date={value.date}
           onPick={(repeat) => {
             patch({ repeat })
-            pop()
+            closeAll()
           }}
-          onClose={pop}
+          onBack={pop}
+          onClose={closeAll}
         />
       ) : null}
 
@@ -702,15 +714,28 @@ function TimePicker({
 
 const PRESETS: RepeatKind[] = ['none', 'daily', 'weekdays', 'weekly', 'monthly', 'quarterly']
 
+/**
+ * The repeat sheet — SPEC.md §7.
+ *
+ * Unlike the date sheet, picking here *is* the whole answer: "every day" and
+ * "every week on Monday" say when the task lands without needing a day out of
+ * the calendar as well. So a preset commits and dismisses the pickers outright
+ * (`onPick`), and the way back to the calendar is the explicit Back button in
+ * the footer — bottom-left, in thumb reach on a phone, rather than a chevron
+ * up in the corner. The header's × closes the stack, as it does everywhere.
+ */
 function RepeatPicker({
   repeat,
   date,
   onPick,
+  onBack,
   onClose,
 }: {
   repeat: RepeatSpec
   date: ISODate | null
   onPick: (repeat: RepeatSpec) => void
+  /** Back to the date sheet this one was opened from. */
+  onBack: () => void
   onClose: () => void
 }) {
   const current = classifyRepeat(repeat)
@@ -724,13 +749,26 @@ function RepeatPicker({
         spec={custom}
         onChange={setCustom}
         onSave={() => onPick(custom)}
-        onCancel={() => setCustom(null)}
+        onBack={() => setCustom(null)}
+        onClose={onClose}
       />
     )
   }
 
   return (
-    <Sheet title="Repeat" onClose={onClose}>
+    <Sheet
+      title="Repeat"
+      onClose={onClose}
+      footer={
+        <div className="sheet-foot-row">
+          <button type="button" className="btn btn-sm btn-quiet" onClick={onBack}>
+            <ChevronLeft />
+            Back
+          </button>
+          <span className="spacer" />
+        </div>
+      }
+    >
       {PRESETS.map((kind) => {
         const spec = buildRepeat(kind, date, repeat)
         return (
@@ -766,12 +804,15 @@ function CustomRepeat({
   spec,
   onChange,
   onSave,
-  onCancel,
+  onBack,
+  onClose,
 }: {
   spec: RepeatSpec
   onChange: (spec: RepeatSpec) => void
   onSave: () => void
-  onCancel: () => void
+  /** Back to the preset list, discarding the custom spec being built. */
+  onBack: () => void
+  onClose: () => void
 }) {
   const weekly = spec.cadence_type === 'weekly'
   const monthly = spec.cadence_type === 'monthly'
@@ -779,15 +820,15 @@ function CustomRepeat({
   return (
     <Sheet
       title="Custom repeat"
-      onClose={onCancel}
-      onBack={onCancel}
+      onClose={onClose}
       footer={
         <div className="sheet-foot-row">
+          <button type="button" className="btn btn-sm btn-quiet" onClick={onBack}>
+            <ChevronLeft />
+            Back
+          </button>
           <span className="sheet-foot-note">{describeRepeat(spec)}</span>
           <span className="spacer" />
-          <button type="button" className="btn btn-sm btn-quiet" onClick={onCancel}>
-            Cancel
-          </button>
           <button
             type="button"
             className="btn btn-sm btn-primary"
@@ -1048,6 +1089,14 @@ function RepeatIcon() {
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4">
       <path d="M3 7a5 5 0 018.6-3.4M13 9a5 5 0 01-8.6 3.4" strokeLinecap="round" />
       <path d="M11.6 1.4v2.4h-2.4M4.4 14.6v-2.4h2.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function ChevronLeft() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <path d="M10 3.5L5.5 8l4.5 4.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

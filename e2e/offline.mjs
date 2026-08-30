@@ -5,7 +5,7 @@
  * not something unit tests can tell you, and it is not something to find out
  * on a plane, so it is checked here against the real service worker.
  *
- *   npm run build && npm run e2e
+ *   npm run build:e2e && npm run e2e
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
@@ -13,7 +13,6 @@ import { chromium } from 'playwright'
 import { serve } from './serve.mjs'
 
 const BASE = process.env.BASE ?? 'http://localhost:4173'
-const FIXTURES = new URL('../migration/', import.meta.url).pathname
 const errors = []
 
 const server = await serve(Number(new URL(BASE).port || 80))
@@ -103,13 +102,9 @@ await step('the service worker takes control and precaches the bundle', async ()
   console.log(`      ${cached.total} entries in ${cached.names.join(', ')}`)
 })
 
-await step('import data, so there is something to find offline', async () => {
-  await page.click('.tab[href="/settings"]')
-  await page.waitForSelector('text=Import / export')
-  await page.setInputFiles('input[type=file]', `${FIXTURES}sample-export.json`)
-  await page.waitForSelector('text=Replace my data')
-  await page.click('text=Replace my data')
-  await page.waitForSelector('text=Imported 10 areas', { timeout: 8000 })
+await step('the seeded sample gives us something to find offline', async () => {
+  // `build:e2e` loads migration/sample-export.json into an empty store on boot.
+  await page.waitForSelector('.row-title', { timeout: 8000 })
 })
 
 await step('AIRPLANE MODE: opens with the network cut', async () => {

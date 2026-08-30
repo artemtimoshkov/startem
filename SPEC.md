@@ -94,7 +94,7 @@ Stored as `subgoals` for continuity with the original schema; everywhere else th
 | area_id | bigint, fk | → areas.id. **Required** — every task scores against exactly one area. |
 | goal_id | bigint, fk, null | → goals.id, or null for a task attached straight to its area. |
 | title | text | — |
-| importance | enum | `high` / `medium` / `low`, default `medium`. Sets the weight of every occurrence. |
+| importance | enum | `high` / `medium` / `low`. Sets the weight of every occurrence. A row that arrives without one is repaired to `medium`; the composer opens a **new** task on `low` (P3) — see §7. |
 | cadence_type | enum | `daily` / `weekly` / `monthly` / `quarterly` / `once` |
 | interval | int | Every N units of the cadence. `1` for everything but a custom repeat. |
 | days | json int[] | Weekly only. Weekday numbers, e.g. `[0,2,5]`. Empty for other cadences. |
@@ -236,8 +236,8 @@ The model is a **weighted pool of occurrences**. Every time a task comes due it 
 | Importance | Weight | Meaning |
 |---|---|---|
 | high | 4 | Each occurrence counts four times a low one. |
-| medium | 2 | Default. |
-| low | 1 | — |
+| medium | 2 | The repair value for a row that arrives with no priority at all. |
+| low | 1 | **What a new task opens on** (§7). |
 
 A task's weight comes from **its own** priority, unless `subgoals.weight` overrides it with an explicit number. Priority is not inherited from a goal — there may not be one.
 
@@ -353,13 +353,16 @@ The day detail view includes pending items — it's a checklist, so it must show
 | Back-date | **No surface as of v2.5** — the day screen was the only one, and it went with the calendar. The rule it enforced still stands in `canEditDay` for whatever brings it back: any day within **182 days** (26 weeks) is correctable, and a future day never is. |
 | Freeze / unfreeze a goal | Opens or closes a freeze period, and flips `status`. |
 | Add a task | The composer: a line to type into, and chips for **where** (area, and a goal inside it or none), **when** (date → calendar, shortcuts, time, repeat) and **priority**. Typing `p1` / `p2` / `p3` sets the priority and leaves the title. |
+| Priority of a new task | Opens on **P3 / low** (weight 1), not the middle of the scale. Most of what gets typed in is ordinary, and defaulting to P2 quietly counted every routine task double a genuinely small one until it was corrected by hand. Starting at the floor makes *raising* the priority the deliberate act. Editing an existing task still opens on whatever it already carries. |
 | Pick a date | The date sheet offers **Today**, **Tomorrow**, **This weekend** (the coming Saturday, or today when today is a Saturday or a Sunday) and **No date**, then a month grid. Picking a day **does not close the sheet** — it turns that day red and leaves Time and Repeat, which live in the same sheet's footer, one tap away. The sheet closes on the backdrop, the ✕ or Escape. |
+| Pick a repeat | The repeat sheet opens from the date sheet's footer and lists the presets. Picking one **is** the whole answer — "every day" or "every week on Monday" says when the task lands without a day out of the calendar as well — so it commits and **closes the pickers outright**, unlike picking a date. **Back**, bottom-left in the footer and in thumb reach on a phone, returns to the date sheet; the ✕, the backdrop and Escape close the stack. **Custom…** opens a sub-sheet with the same bottom-left Back, and its Save commits and closes the same way. |
 | Edit a task | The same composer, opened on the task. There is no second form to keep in step with the first. |
 | Archive a task | Removes it from the interface; the row and its check-ins stay. |
 | Create / edit a goal | Title, area, description. Goals are created from the **area screen**, or on the spot from the composer's area picker — never as a side effect of adding a task. |
 | Delete a goal | Tombstones the heading and its freeze periods, and detaches its tasks to the area. Confirm inline — never with a browser dialog. |
-| Rename an area | Name only. Areas are not created or destroyed by the user. |
+| Rename an area | **No surface as of v2.6** — the settings screen was the only one, and it went with the JSON import/export. `renameArea` still stands in the store, and tested, for whatever brings it back: name only, a blank name refused, and areas still never created or destroyed. |
 | Sign in / out | Magic-link email sign-in. Signing out keeps local data on the device; signing in merges it up. See §10. |
+| Import / export JSON | **Removed in v2.6**, along with the settings screen that held it. `importSnapshot` survives as the sample dataset's loader and as the shape §11's one-off migration would arrive in; there is no export, and no screen. |
 
 > **Deliberately not built — a minimum-sample gate.** Without it, the first check-in on a brand-new goal reads as 10.0, because it is genuinely 100% of one resolved obligation. This was considered and rejected — it self-corrects within a week or two of real history. If the early days ever feel meaningless, the fix is to hide a score until some number of weighted occurrences have resolved, rather than to fudge the arithmetic.
 
@@ -502,13 +505,14 @@ startem/
     core/          # score, state, rows — pure, imports nothing
     db/            # Dexie schema, one store per table
     sync/          # outbox, push/pull loop, session handling
-    ui/            # React: Tasks, Star, Goal, Settings
+    ui/            # React: Tasks, Star, Goal
   public/          # icons 180/192/512 + maskable (all PNG)
   scripts/         # make-icons.mjs — rasterises the icons, so the PNGs
                    # are generated from one definition rather than hand-made
   e2e/             # browser checks: the offline boot, the SPA rewrite, the
                    # store's real behaviour — none of which unit tests can see
-  migration/       # sample-export.json: the documented import shape
+  migration/       # sample-export.json: the sample dataset, and the
+                   # documented shape a one-off migration would arrive in
   supabase/
     migrations/    # cloud schema + RLS policies, checked in
   index.html
@@ -536,7 +540,7 @@ No monorepo, no workspaces — one `package.json`, one install, one build. The �
 ### Build order — each milestone is usable on its own
 
 1. **Core, pure.** Port §2–§6 into `src/core` with unit tests on the cadence and window rules. No UI yet; this is where all the subtle bugs live, so it gets tests first.
-2. **Local-only app.** UI on Dexie, full feature set, zero network. Import the existing JSON export here and live on it.
+2. **Local-only app.** UI on Dexie, full feature set, zero network. Any one-off import of existing data happens through `importSnapshot`, not through a screen — the settings screen and its JSON import/export were removed in v2.6.
 3. **Install it.** Manifest + service worker; deploy to Vercel; Add to Home Screen on the iPhone; verify it opens in airplane mode.
 4. **Cloud.** Supabase schema, RLS, magic-link login screen.
 5. **Sync.** Outbox, push/pull, tombstones, the sync indicator. Test the two-device case: phone and laptop editing the same day offline.
@@ -568,6 +572,6 @@ Each of these cost real debugging the first time — plus three known ones added
 
 ---
 
-**Migration:** Existing data moves across as JSON — the five tables dumped whole, imported into the device store at milestone 2 with row ids preserved, because the tables reference each other by id. The first sync after login then seeds Supabase from the device, so the migration is one import, not two. Read the destination's column list when importing, so an export taken before a schema change still loads.
+**Migration:** Existing data moves across as JSON — the five tables dumped whole, loaded into the device store at milestone 2 with row ids preserved, because the tables reference each other by id. The first sync after login then seeds Supabase from the device, so the migration is one import, not two. Read the destination's column list when loading, so a dump taken before a schema change still loads. There is no import screen — `importSnapshot` is the whole surface, and `migration/sample-export.json` is the worked example of the shape.
 
 **Moving priority onto the task (v2.4):** an export or a device written before this carries `goals.importance` and no `subgoals.area_id`. Both the JSON importer and the IndexedDB upgrade hand each goal's importance *down* to its tasks and fill `area_id` from the goal, **before** dropping the column. Doing it in the other order would reset every task on the device to `medium` and silently re-weight the whole star.

@@ -326,6 +326,11 @@ export async function setGoalStatus(goalId: number, status: GoalStatus): Promise
 // Areas (§7 — name only; areas are not created or destroyed by the user)
 // ---------------------------------------------------------------------------
 
+/**
+ * **No surface as of v2.6** — the settings screen was the only one, and it
+ * went with the JSON import/export. The rule stays here, and tested, for
+ * whatever brings renaming back: a blank name is refused rather than stored.
+ */
 export async function renameArea(areaId: number, name: string): Promise<void> {
   const area = await db.areas.get(areaId)
   if (!area) return
@@ -333,7 +338,7 @@ export async function renameArea(areaId: number, name: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Migration: the JSON import and export
+// Loading a whole snapshot — the sample dataset's engine
 // ---------------------------------------------------------------------------
 
 export interface ImportResult {
@@ -345,10 +350,14 @@ export interface ImportResult {
 }
 
 /**
- * Replaces the local store with a JSON export, **ids preserved** — the tables
- * reference each other by id, so remapping them would break every foreign
- * key. Normalisation reads the destination's column list, so an export taken
- * before a schema change still loads.
+ * Replaces the local store with a whole snapshot, **ids preserved** — the
+ * tables reference each other by id, so remapping them would break every
+ * foreign key. Normalisation reads the destination's column list, so a
+ * snapshot written before a schema change still loads.
+ *
+ * The app no longer imports or exports JSON — that screen is gone — so the
+ * only caller left is `importSample` below. It stays whole, and tested,
+ * because it is also the shape §11's one-off migration would arrive in.
  */
 export async function importSnapshot(raw: unknown, today = todayISO()): Promise<ImportResult> {
   const snapshot = normaliseSnapshot(raw, today)
@@ -392,22 +401,17 @@ export async function importSnapshot(raw: unknown, today = todayISO()): Promise<
   }
 }
 
-/** The five tables dumped whole, in the same shape the importer accepts. */
-export async function exportSnapshot(): Promise<Snapshot> {
-  return loadSnapshot()
-}
-
 // ---------------------------------------------------------------------------
 // Sample data
 // ---------------------------------------------------------------------------
 
 /**
- * Loads `migration/sample-export.json` through the ordinary import path.
+ * Loads `migration/sample-export.json` through the snapshot loader above.
  *
  * It exists for the same reason the file is checked in: a fresh install has
  * nothing to show, and the star, the strip and the calendar cannot be judged
- * against an empty store. It is also a live, working example of the export
- * shape the real migration has to match.
+ * against an empty store. Preview builds (`VITE_SEED_SAMPLE=1`) are its only
+ * caller.
  */
 export async function importSample(today = todayISO()): Promise<ImportResult> {
   return importSnapshot(sampleExport, today)

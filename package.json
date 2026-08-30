@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:e2e": "tsc --noEmit && VITE_SEED_SAMPLE=1 vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
