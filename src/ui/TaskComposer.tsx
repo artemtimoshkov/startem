@@ -1,11 +1,16 @@
 /**
  * The task composer — SPEC.md §7.
  *
- * One card: a line to type the task into, and under it the three things a task
- * needs before it can be scheduled or scored — where it belongs (area, and
- * optionally a goal inside it), when it is due, and how much it matters.
- * Everything else — the calendar, the time, the repeat — hangs off the date
- * chip, because that is the only one of them that has any meaning without it.
+ * One card, and one switch at the top of it: a **habit** repeats and is what
+ * the star scores; a **to-do** happens once and is not scored at all (§5).
+ * That switch is the only place the two are chosen between, and it writes
+ * nothing but the repeat — the distinction *is* the repeat (§3).
+ *
+ * Under it, a line to type the task into and the three things a task needs
+ * before it can be scheduled or scored: which area it belongs to, when it
+ * lands, and how much it matters. Everything else — the calendar, the time,
+ * the repeat — hangs off the date chip, because that is the only one of them
+ * that has any meaning without it.
  *
  * The pickers are bottom sheets rather than browser dialogs (§8), and the
  * repeat presets come from the pure core so that the words here and the
@@ -33,7 +38,7 @@ import {
   type RepeatSpec,
   type Subgoal,
 } from '../core'
-import { archiveTask, createGoal, saveTask, type TaskDraft } from '../db/repo'
+import { archiveTask, saveTask, type TaskDraft } from '../db/repo'
 import { useSnapshot } from './DataContext'
 import {
   Cross,
@@ -41,9 +46,9 @@ import {
   PRIORITIES,
   PRIORITY_LABEL,
   PRIORITY_NAME,
-  Plus,
   Sheet,
   SheetRow,
+  Tick,
   WEEKDAY_INITIALS,
   WEEKDAY_LABELS,
   formatDate,
@@ -56,7 +61,6 @@ import {
 export interface ComposerValue {
   title: string
   area_id: number
-  goal_id: number | null
   importance: Importance
   /** A one-time task's deadline, or a repeating one's start. Optional either way. */
   date: ISODate | null
@@ -76,7 +80,6 @@ export function toTaskDraft(value: ComposerValue, id?: number): TaskDraft {
   return {
     ...(id == null ? {} : { id }),
     area_id: value.area_id,
-    goal_id: value.goal_id,
     title: value.title.trim(),
     importance: value.importance,
     cadence_type: value.repeat.cadence_type,
@@ -98,7 +101,6 @@ export function fromTask(task: Subgoal): ComposerValue {
   return {
     title: task.title,
     area_id: task.area_id,
-    goal_id: task.goal_id,
     importance: task.importance,
     date: task.cadence_type === 'once' ? task.due_date : task.start_date,
     time: task.time,
@@ -150,6 +152,15 @@ const DEFAULT_IMPORTANCE: Importance = 'low'
 
 type Picker = 'where' | 'date' | 'repeat' | 'time' | 'priority'
 
+/**
+ * What "make this a habit" means when there is no repeat to keep.
+ *
+ * Daily, because a habit typed in without a thought is almost always a daily
+ * one, and because it is the cadence that reads back most obviously wrong if
+ * it was not what was meant — which is what makes it safe to guess.
+ */
+const HABIT_FALLBACK: RepeatKind = 'daily'
+
 export function TaskComposer({
   taskId,
   initial,
@@ -167,11 +178,13 @@ export function TaskComposer({
   const [value, setValue] = useState<ComposerValue>(() => ({
     title: '',
     area_id: initial?.area_id ?? index.areas[0]?.id ?? 1,
-    goal_id: initial?.goal_id ?? null,
     importance: initial?.importance ?? DEFAULT_IMPORTANCE,
     date: initial?.date ?? null,
     time: initial?.time ?? null,
-    repeat: initial?.repeat ?? noRepeat(),
+    /* A habit unless the caller says otherwise. This is a habit tracker:
+       the to-do screen is the one place that opens on `noRepeat()`, and
+       everywhere else the common case should cost no taps (§7). */
+    repeat: initial?.repeat ?? buildRepeat(HABIT_FALLBACK, initial?.date ?? null),
     ...initial,
   }))
   // A stack, so the Repeat sheet opened from inside the date sheet comes back
@@ -188,8 +201,19 @@ export function TaskComposer({
   const patch = (p: Partial<ComposerValue>) => setValue((v) => ({ ...v, ...p }))
 
   const area = index.areaById.get(value.area_id)
-  const goal = value.goal_id == null ? null : index.goalById.get(value.goal_id)
+  const habit = value.repeat.cadence_type !== 'once'
   const canSave = value.title.trim().length > 0 && !saving
+
+  /**
+   * The habit / to-do switch. It sets the repeat and nothing else: a habit
+   * with no repeat is a contradiction, and a to-do with one is a habit (§3).
+   * Turning a habit into a to-do keeps the date as its deadline, which is what
+   * "do this once, by then" already meant.
+   */
+  const setKind = (toHabit: boolean) => {
+    if (toHabit === habit) return
+    patch({ repeat: toHabit ? buildRepeat(HABIT_FALLBACK, value.date) : noRepeat() })
+  }
 
   const setTitle = (raw: string) => {
     const token = readPriorityToken(raw)
@@ -221,6 +245,27 @@ export function TaskComposer({
 
   return (
     <div className="composer">
+      <div className="kindswitch" role="group" aria-label="What kind of task">
+        <button
+          type="button"
+          className="kindswitch-btn"
+          aria-pressed={habit}
+          onClick={() => setKind(true)}
+        >
+          <RepeatIcon />
+          Habit
+        </button>
+        <button
+          type="button"
+          className="kindswitch-btn"
+          aria-pressed={!habit}
+          onClick={() => setKind(false)}
+        >
+          <Tick size={13} />
+          To-do
+        </button>
+      </div>
+
       <input
         ref={input}
         className="composer-input"
@@ -228,8 +273,8 @@ export function TaskComposer({
         // exists because the user just asked to type a task.
         autoFocus
         value={value.title}
-        aria-label="Task"
-        placeholder="Type task here"
+        aria-label={habit ? 'Habit' : 'To-do'}
+        placeholder={habit ? 'e.g. Wake up at 7 am' : 'e.g. Book the dentist'}
         enterKeyHint="done"
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => {
@@ -243,10 +288,10 @@ export function TaskComposer({
           type="button"
           className="chip"
           onClick={() => push('where')}
-          aria-label={`Area and goal: ${area?.name ?? 'none'}${goal ? `, ${goal.title}` : ''}`}
+          aria-label={`Area: ${area?.name ?? 'none'}`}
         >
           <InboxIcon />
-          {goal ? `${area?.name ?? ''} › ${goal.title}` : (area?.name ?? 'Area')}
+          {area?.name ?? 'Area'}
         </button>
 
         <button
@@ -257,12 +302,15 @@ export function TaskComposer({
           <CalendarIcon />
           {dateChipLabel(value, today)}
         </button>
-        {value.date || value.repeat.cadence_type !== 'once' ? (
+        {/* Clears the date and time only — never the repeat. Dropping the
+            repeat would turn a habit into a to-do behind the user's back, and
+            that decision belongs to the switch above (§7). */}
+        {value.date || value.time ? (
           <button
             type="button"
             className="chip-clear"
-            aria-label="Clear the date and repeat"
-            onClick={() => patch({ date: null, time: null, repeat: noRepeat() })}
+            aria-label="Clear the date"
+            onClick={() => patch({ date: null, time: null })}
           >
             <Cross size={11} />
           </button>
@@ -307,11 +355,10 @@ export function TaskComposer({
       </div>
 
       {open === 'where' ? (
-        <WherePicker
+        <AreaPicker
           area_id={value.area_id}
-          goal_id={value.goal_id}
-          onPick={(area_id, goal_id) => {
-            patch({ area_id, goal_id })
+          onPick={(area_id) => {
+            patch({ area_id })
             closeAll()
           }}
           onClose={pop}
@@ -408,110 +455,43 @@ function dateChipLabel(value: ComposerValue, today: ISODate): string {
 }
 
 // ---------------------------------------------------------------------------
-// Where the task lives: an area, and a goal inside it or none at all
+// Where the task lives: an area, and nothing below it
 // ---------------------------------------------------------------------------
 
-function WherePicker({
+/**
+ * One flat list of areas — no second level, because there is no longer one.
+ *
+ * A habit hangs straight off "Health"; the goals inside Health are aims, not
+ * folders, and putting them here would recreate exactly the tier §3 removed.
+ * Areas themselves are added and removed from the star's edit mode (§7), so
+ * this sheet only ever chooses between what is already there.
+ */
+function AreaPicker({
   area_id,
-  goal_id,
   onPick,
   onClose,
 }: {
   area_id: number
-  goal_id: number | null
-  onPick: (area_id: number, goal_id: number | null) => void
+  onPick: (area_id: number) => void
   onClose: () => void
 }) {
-  const { index, today } = useSnapshot()
-  const [areaOpen, setAreaOpen] = useState<number | null>(goal_id != null ? area_id : null)
-  const [newGoal, setNewGoal] = useState<string | null>(null)
-
-  if (areaOpen == null) {
-    return (
-      <Sheet title="Area" onClose={onClose}>
-        {index.areas.map((a) => {
-          const goals = index.goalsByArea.get(a.id) ?? []
-          return (
-            <SheetRow
-              key={a.id}
-              label={a.name}
-              hint={goals.length === 0 ? 'no goals' : `${goals.length} goal${goals.length === 1 ? '' : 's'}`}
-              selected={a.id === area_id && goal_id == null}
-              onClick={() => setAreaOpen(a.id)}
-            />
-          )
-        })}
-      </Sheet>
-    )
-  }
-
-  const area = index.areaById.get(areaOpen)
-  const goals = index.goalsByArea.get(areaOpen) ?? []
+  const { index } = useSnapshot()
 
   return (
-    <Sheet
-      title={area?.name ?? 'Area'}
-      onClose={onClose}
-      onBack={() => {
-        setNewGoal(null)
-        setAreaOpen(null)
-      }}
-      footer={
-        newGoal == null ? (
-          <button type="button" className="sheet-cta" onClick={() => setNewGoal('')}>
-            <Plus size={16} />
-            Create new goal
-          </button>
-        ) : (
-          <form
-            className="sheet-create"
-            onSubmit={(e) => {
-              e.preventDefault()
-              const title = newGoal.trim()
-              if (!title) return
-              void createGoal(areaOpen, title, today).then((id) => onPick(areaOpen, id))
-            }}
-          >
-            <input
-              className="input input-sm"
-              // eslint-disable-next-line jsx-a11y/no-autofocus
-              autoFocus
-              value={newGoal}
-              aria-label={`New goal in ${area?.name ?? ''}`}
-              placeholder="Goal name"
-              onChange={(e) => setNewGoal(e.target.value)}
-            />
-            <button type="submit" className="btn btn-sm btn-primary" disabled={!newGoal.trim()}>
-              Create
-            </button>
-            <button type="button" className="btn btn-sm btn-quiet" onClick={() => setNewGoal(null)}>
-              Cancel
-            </button>
-          </form>
+    <Sheet title="Area" onClose={onClose}>
+      {index.areas.map((a) => {
+        const habits = (index.habitsByArea.get(a.id) ?? []).length
+        return (
+          <SheetRow
+            key={a.id}
+            label={a.name}
+            hint={habits === 0 ? 'no habits yet' : `${habits} habit${habits === 1 ? '' : 's'}`}
+            selected={a.id === area_id}
+            onClick={() => onPick(a.id)}
+          />
         )
-      }
-    >
-      <SheetRow
-        label={`${area?.name ?? 'This area'} only`}
-        hint="no goal"
-        selected={goal_id == null && area_id === areaOpen}
-        onClick={() => onPick(areaOpen, null)}
-      />
-      {goals.map((g) => (
-        <SheetRow
-          key={g.id}
-          label={g.title}
-          hint={g.status === 'frozen' ? 'frozen' : undefined}
-          selected={g.id === goal_id}
-          onClick={() => onPick(areaOpen, g.id)}
-        />
-      ))}
-      {goals.length === 0 ? (
-        <p className="sheet-note">
-          No goals here yet. A task does not need one — it already scores against{' '}
-          {area?.name ?? 'this area'}.
-        </p>
-      ) : null}
+      })}
+      <p className="sheet-note">Areas are added and removed from the star.</p>
     </Sheet>
   )
 }
@@ -568,11 +548,13 @@ function DatePicker({
       onClose={onClose}
       footer={
         <div className="sheet-foot-row">
-          <button type="button" className="btn btn-sm" onClick={onTime}>
+          {/* The labels read back what is already set, so the aria-label
+              carries the fixed name of the control instead (§8). */}
+          <button type="button" className="btn btn-sm" aria-label="Time" onClick={onTime}>
             <ClockIcon />
             {value.time ?? 'Time'}
           </button>
-          <button type="button" className="btn btn-sm" onClick={onRepeat}>
+          <button type="button" className="btn btn-sm" aria-label="Repeat" onClick={onRepeat}>
             <RepeatIcon />
             {value.repeat.cadence_type === 'once'
               ? 'Repeat'

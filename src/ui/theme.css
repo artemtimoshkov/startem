@@ -13,9 +13,16 @@
   --imp-high: #c8443a;
   --imp-medium: #cf8c22;
   --imp-low: #3a8f5c;
-  /* A frozen goal shows a neutral grey stripe, not its priority colour —
+  /* A paused habit shows a neutral grey stripe, not its priority colour —
      advertising urgency for something excluded from scoring is a lie. */
   --frozen: #b6bcc5;
+  /* The tracker grid's kept/missed pair. Deliberately the accent and a wash of
+     it rather than green/red: the grid is read as a texture at a glance, and
+     two hues fighting at that size reads as noise. */
+  --cell-done: var(--accent);
+  --cell-partial: rgba(61, 106, 143, 0.45);
+  --cell-missed: rgba(200, 68, 58, 0.28);
+  --cell-none: rgba(25, 28, 33, 0.05);
 
   /* Shadows carry the palette's hue rather than flat black. */
   --shadow-1: 0 1px 2px rgba(25, 28, 33, 0.04), 0 1px 8px rgba(61, 106, 143, 0.05);
@@ -767,9 +774,6 @@ a { color: var(--accent); text-decoration: none; }
 }
 .row.is-skipped .row-open { text-decoration: line-through; }
 
-/* A goal carries no priority, so its stripe says only "live" (§3). */
-.bg-goal { background: rgba(61, 106, 143, 0.35); }
-
 /* A section heading that opens and closes what is under it. */
 .section-toggle {
   display: flex;
@@ -781,3 +785,300 @@ a { color: var(--accent); text-decoration: none; }
 }
 .section-caret { display: inline-flex; transition: transform 0.15s ease; }
 .section-caret.is-open { transform: rotate(90deg); }
+
+/* ------------------------------------------------- section headings -- */
+
+/* A heading with something on its right: a count, or a way through to the
+   full list the section is a slice of. */
+.section-label-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.section-more {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-tertiary);
+}
+a.section-more { color: var(--accent); }
+.section-label.is-late { color: var(--imp-high); }
+
+/* ----------------------------------------------------------- streak -- */
+
+.streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--imp-medium);
+  font-variant-numeric: tabular-nums;
+  font-weight: 560;
+}
+.streak.big { font-size: 20px; letter-spacing: -0.02em; gap: 3px; }
+
+/* --------------------------------------------- habit / to-do switch -- */
+
+/* The one control that decides which of the two things is being written. It
+   sits above the title rather than among the chips because it changes what
+   the chips below it mean (§7). */
+.kindswitch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 10px;
+  background: rgba(25, 28, 33, 0.05);
+  border-radius: 999px;
+}
+.kindswitch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 560;
+  cursor: pointer;
+}
+.kindswitch-btn[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+/* ------------------------------------------------------------ goals -- */
+
+/* An aim, written and read in place. There is no goal screen to open, so
+   everything a goal has fits between these rules (§7). */
+.goal-row + .goal-row,
+.goal-row + .goal-add,
+.goal-row + .goal-body { border-top: 1px solid var(--hairline); }
+
+.goal-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.goal-check { flex: none; margin-top: 1px; }
+.goal-title {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  line-height: 1.3;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.goal-when {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+.goal-row.is-done .goal-title { color: var(--text-secondary); }
+
+.goal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px 14px 46px;
+}
+
+.goal-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--hairline);
+}
+.goal-add-icon { display: inline-flex; color: var(--text-tertiary); }
+.goal-add-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  color: var(--text);
+  padding: 2px 0;
+}
+.goal-add-input:focus { outline: none; }
+.goal-add-input::placeholder { color: var(--text-tertiary); }
+
+/* ---------------------------------------------------- editing areas -- */
+
+.edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.edit-row + .edit-row { border-top: 1px solid var(--hairline); }
+.edit-move { display: flex; flex-direction: column; gap: 1px; }
+.edit-arrow {
+  width: 26px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(25, 28, 33, 0.05);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.edit-arrow:disabled { opacity: 0.3; cursor: default; }
+.edit-name {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-inner);
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  color: var(--text);
+  padding: 7px 8px;
+}
+.edit-name:focus { border-color: var(--accent); outline: none; }
+.edit-remove {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.edit-remove:hover:not(:disabled) { background: rgba(200, 68, 58, 0.1); color: var(--imp-high); }
+.edit-remove:disabled { opacity: 0.3; cursor: default; }
+
+.area-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.area-add .input { flex: 1; min-width: 0; }
+
+/* ----------------------------------------------- the tracker grid -- */
+
+/* Fifteen weeks down the columns: seven fixed rows, one per weekday, so the
+   whole span fits a phone's width without scrolling (§6). */
+.daygrid { display: flex; gap: 5px; align-items: flex-start; }
+.daygrid-days {
+  display: grid;
+  grid-template-rows: repeat(7, 1fr);
+  gap: 3px;
+  font-size: 9px;
+  color: var(--text-tertiary);
+  line-height: 1;
+}
+.daygrid-days > span { display: grid; place-items: center; height: 12px; }
+.daygrid-weeks { flex: 1; display: flex; gap: 3px; min-width: 0; }
+.daygrid-week {
+  flex: 1;
+  display: grid;
+  grid-template-rows: repeat(7, 1fr);
+  gap: 3px;
+  min-width: 0;
+}
+
+.daycell {
+  display: block;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--cell-none);
+}
+.daycell.is-done { background: var(--cell-done); }
+.daycell.is-partial { background: var(--cell-partial); }
+.daycell.is-missed { background: var(--cell-missed); }
+.daycell.is-today { background: var(--surface); box-shadow: inset 0 0 0 1.6px var(--imp-medium); }
+.daycell.is-frozen { background: repeating-linear-gradient(45deg, var(--frozen) 0 2px, transparent 2px 4px); }
+.daycell.is-future { background: transparent; }
+
+.daygrid-key {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 12px 0 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.daygrid-key .daycell { width: 12px; margin-left: 8px; }
+.daygrid-key .daycell:first-child { margin-left: 0; }
+
+/* ------------------------------------------------------ week strip -- */
+
+.weekstrip { display: flex; gap: 4px; align-items: flex-end; height: 40px; margin-top: 10px; }
+.weekbar {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(25, 28, 33, 0.045);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.weekbar.is-current { box-shadow: inset 0 0 0 1px rgba(61, 106, 143, 0.35); }
+.weekbar-fill { width: 100%; background: var(--accent); border-radius: 3px; }
+/* Nothing owed that week is a hairline, not a zero — the two must not read
+   the same (§6). */
+.weekbar-empty { width: 100%; height: 2px; background: var(--hairline); }
+
+/* ----------------------------------------------------------- stats -- */
+
+.stat-row { display: flex; gap: 8px; }
+.stat { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.stat .pct, .stat .num { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.stat-note { margin: 12px 0 0; font-size: 13px; color: var(--text-secondary); }
+
+/* ------------------------------------------------------------- tabs -- */
+
+.tab-icon { position: relative; display: inline-flex; }
+.tab-badge {
+  position: absolute;
+  top: -4px;
+  right: -7px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--imp-high);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 640;
+  line-height: 1;
+}
+
+/* A button that reads as a link — for going back without a real href. */
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}

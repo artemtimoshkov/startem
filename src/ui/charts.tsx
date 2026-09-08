@@ -1,6 +1,7 @@
-/** The star — the app's one chart (SPEC.md §6, §8). */
+/** The star, and the two small charts beside it (SPEC.md §6, §8). */
 
-import type { StarView } from '../core'
+import type { HabitGridView, StarView, WeekBar } from '../core'
+import { WEEKDAY_INITIALS } from './bits'
 
 /**
  * The radar chart: one vertex per area, first at twelve o'clock and going
@@ -155,6 +156,95 @@ export function RadarChart({
           )
         })}
       </svg>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The per-habit tracker grid (§6)
+// ---------------------------------------------------------------------------
+
+const CELL_TITLE: Record<string, string> = {
+  done: 'kept',
+  partial: 'partly kept',
+  missed: 'missed',
+  today: 'due today',
+  none: 'not due',
+  frozen: 'paused',
+  future: '',
+}
+
+/**
+ * Fifteen weeks of one habit, Monday-aligned rows, oldest column first.
+ *
+ * Weeks run down the columns rather than across, which is what lets fifteen of
+ * them fit the width of a phone without scrolling: seven rows, one per
+ * weekday, is a fixed height whatever the span.
+ */
+export function DayGrid({ view }: { view: HabitGridView }) {
+  const kept = view.weeks.flatMap((w) => w.days).filter((d) => d.state === 'done').length
+  const missed = view.weeks.flatMap((w) => w.days).filter((d) => d.state === 'missed').length
+
+  return (
+    <div>
+      <div
+        className="daygrid"
+        role="img"
+        aria-label={`Fifteen weeks: ${kept} days kept, ${missed} missed.`}
+      >
+        <div className="daygrid-days" aria-hidden="true">
+          {WEEKDAY_INITIALS.map((initial, i) => (
+            <span key={i}>{i % 2 === 0 ? initial : ''}</span>
+          ))}
+        </div>
+        <div className="daygrid-weeks">
+          {view.weeks.map((week) => (
+            <div key={week.weekStart} className="daygrid-week">
+              {week.days.map((day) => (
+                <span
+                  key={day.date}
+                  className={`daycell is-${day.state}`}
+                  title={`${day.date}${CELL_TITLE[day.state] ? ` — ${CELL_TITLE[day.state]}` : ''}`}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="daygrid-key" aria-hidden="true">
+        <span className="daycell is-missed" /> missed
+        <span className="daycell is-today" /> today
+        <span className="daycell is-done" /> kept
+        <span className="daycell is-frozen" /> paused
+      </p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Eight-week history strip (§6)
+// ---------------------------------------------------------------------------
+
+/**
+ * One bar per calendar week, in range mode — only what genuinely came due
+ * inside each week (§5). A week with nothing due draws as a hairline rather
+ * than as a zero: nothing owed is not the same as nothing done.
+ */
+export function WeekStrip({ bars }: { bars: WeekBar[] }) {
+  const described = bars
+    .map((b) => `${b.weekStart}: ${b.rate == null ? 'nothing due' : `${Math.round(b.rate * 100)}%`}`)
+    .join(', ')
+
+  return (
+    <div className="weekstrip" role="img" aria-label={`Last ${bars.length} weeks — ${described}.`}>
+      {bars.map((bar) => (
+        <span key={bar.weekStart} className={`weekbar${bar.isCurrent ? ' is-current' : ''}`}>
+          <span
+            className={bar.rate == null ? 'weekbar-empty' : 'weekbar-fill'}
+            style={bar.rate == null ? undefined : { height: `${Math.max(4, bar.rate * 100)}%` }}
+          />
+        </span>
+      ))}
     </div>
   )
 }

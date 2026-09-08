@@ -32,10 +32,12 @@ const CLOCK_TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/
 
 const CADENCE_TYPES: CadenceType[] = ['daily', 'weekly', 'monthly', 'quarterly', 'once']
 const IMPORTANCES: Importance[] = ['high', 'medium', 'low']
-const GOAL_STATUSES: GoalStatus[] = ['active', 'frozen']
+const GOAL_STATUSES: GoalStatus[] = ['active', 'achieved']
 const CHECKIN_STATUSES: CheckinStatus[] = ['done', 'skipped']
 
-/** The ten areas the app ships with. The chart adapts to any count (§3). */
+/** The ten areas a fresh install starts on. They are the user's from then
+ *  on — renamed, reordered, added to and removed — and the chart adapts to
+ *  whatever count is left (§3, §7). */
 export const DEFAULT_AREAS: readonly string[] = [
   'Health',
   'Hobbies',
@@ -153,23 +155,40 @@ export function normaliseArea(raw: Record<string, unknown>, index = 0): Area {
 }
 
 /**
- * A goal carries no importance any more — priority is the task's (§3). An
- * export written before that change still has the column; it is read here
- * only to seed the tasks underneath it, in `normaliseSnapshot`.
+ * A goal is an aim: a title, some prose, and whether it has been reached.
+ *
+ * It carries no importance and no tasks. An export written when it carried
+ * either is read leniently — `frozen` is not a goal state any more, so it
+ * falls back to `active`, and the importance column is read elsewhere, in
+ * `normaliseSnapshot`, only to seed the tasks that used to hang off it.
  */
-export function normaliseGoal(raw: Record<string, unknown>, today: ISODate): Goal {
+export function normaliseGoal(
+  raw: Record<string, unknown>,
+  today: ISODate,
+  index = 0,
+): Goal {
+  const status = asEnum(raw['status'], GOAL_STATUSES, 'active')
   return {
     id: asInt(raw['id'], 0),
     area_id: asInt(raw['area_id'], 0),
     title: asText(raw['title']),
     description: asText(raw['description']),
-    status: asEnum(raw['status'], GOAL_STATUSES, 'active'),
+    status,
+    position: asInt(raw['position'], index),
+    // Reached, but with no record of when: the day it was created is the only
+    // date the row can honestly offer, and null would read as "still active"
+    // to anything that tests the date rather than the status.
+    achieved_on:
+      status === 'achieved' ? requireDate(raw['achieved_on'], requireDate(raw['created_at'], today)) : null,
     created_at: requireDate(raw['created_at'], today),
     ...normaliseSyncMeta(raw),
   }
 }
 
-/** What a task inherits from the goal it hangs on, when its own row is silent. */
+/**
+ * What a task inherits from the goal it *used* to hang on, when its own row is
+ * silent. Only an export written before §3's flattening ever supplies it.
+ */
 export interface SubgoalContext {
   area_id?: number
   importance?: Importance
@@ -206,9 +225,6 @@ export function normaliseSubgoal(
   const normalisedWeight =
     weight == null || weight === '' ? null : Math.max(1, asInt(weight, 1))
 
-  const rawGoal = raw['goal_id']
-  const goalId = rawGoal == null || rawGoal === '' ? null : asInt(rawGoal, 0) || null
-
   const rawInterval = raw['interval']
   const interval =
     rawInterval == null || rawInterval === '' ? 1 : Math.max(1, asInt(rawInterval, 1))
@@ -218,10 +234,9 @@ export function normaliseSubgoal(
 
   return {
     id: asInt(raw['id'], 0),
-    // A task always scores against an area. An export written before tasks
-    // had one gets it from the goal it hangs on (§3).
+    // A task belongs to exactly one area. An export written before tasks had
+    // one of their own gets it from the goal they used to hang on (§3).
     area_id: asInt(raw['area_id'], context.area_id ?? 0),
-    goal_id: goalId,
     title: asText(raw['title']),
     importance: asEnum(raw['importance'], IMPORTANCES, context.importance ?? 'medium'),
     cadence_type: cadence,
@@ -252,10 +267,11 @@ export function normaliseCheckin(raw: Record<string, unknown>, today: ISODate): 
   }
 }
 
+/** A pause on one habit. `subgoal_id` is required; a goal cannot be paused. */
 export function normaliseFreeze(raw: Record<string, unknown>, today: ISODate): Freeze {
   return {
     id: asInt(raw['id'], 0),
-    goal_id: asInt(raw['goal_id'], 0),
+    subgoal_id: asInt(raw['subgoal_id'], 0),
     start_date: requireDate(raw['start_date'], today),
     end_date: asDate(raw['end_date']),
     ...normaliseSyncMeta(raw),
@@ -275,12 +291,18 @@ function rows(value: RawTable): Record<string, unknown>[] {
  * Normalises a whole JSON export into a snapshot, ids preserved — the tables
  * reference each other by id, so remapping them would break every foreign key
  * (see the migration note at the end of the spec).
+ *
+ * This is also where an export written against the *old* three-tier shape —
+ * area → goal → task, with the pause hanging off the goal — is flattened onto
+ * §3's two tiers. It is done here rather than in the Dexie upgrade because a
+ * JSON dump can arrive from anywhere, including a phone that never ran the
+ * intervening version.
  */
 export function normaliseSnapshot(raw: unknown, today: ISODate): Snapshot {
   const src = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, RawTable>
 
-  // Read the goals *raw*, so that an export written when importance lived on
-  // the goal can hand it down to that goal's tasks before it is dropped.
+  // Read the goals *raw*: an export written when a task hung off a goal takes
+  // both its area and its priority from that goal before either is dropped.
   const rawGoals = rows(src['goals'])
   const context = new Map<number, SubgoalContext>()
   for (const g of rawGoals) {
@@ -290,15 +312,63 @@ export function normaliseSnapshot(raw: unknown, today: ISODate): Snapshot {
     })
   }
 
+  const rawSubgoals = rows(src['subgoals'])
+  const subgoals = rawSubgoals.map((r) =>
+    normaliseSubgoal(r, today, context.get(asInt(r['goal_id'], 0)) ?? {}),
+  )
+
   return {
     areas: rows(src['areas']).map(normaliseArea),
-    goals: rawGoals.map((r) => normaliseGoal(r, today)),
-    subgoals: rows(src['subgoals']).map((r) =>
-      normaliseSubgoal(r, today, context.get(asInt(r['goal_id'], 0)) ?? {}),
-    ),
+    goals: rawGoals.map((r, i) => normaliseGoal(r, today, i)),
+    subgoals,
     checkins: rows(src['checkins']).map((r) => normaliseCheckin(r, today)),
-    freezes: rows(src['freezes']).map((r) => normaliseFreeze(r, today)),
+    freezes: normaliseFreezes(rows(src['freezes']), rawSubgoals, today),
   }
+}
+
+/**
+ * The freeze table, with a pause that used to sit on a goal handed down to
+ * every task that hung off it.
+ *
+ * One goal-level row becomes N task-level ones, so N−1 of them need ids that
+ * nothing else holds. They are drawn from above the highest id in the table,
+ * which is safe because ids only ever have to be unique, not dense — and a
+ * dropped pause would silently back-fill the dormant weeks with misses (§3),
+ * which is the one outcome worth this much care.
+ */
+function normaliseFreezes(
+  rawFreezes: Record<string, unknown>[],
+  rawSubgoals: Record<string, unknown>[],
+  today: ISODate,
+): Freeze[] {
+  const byGoal = new Map<number, number[]>()
+  for (const r of rawSubgoals) {
+    const goalId = asInt(r['goal_id'], 0)
+    if (!goalId) continue
+    const bucket = byGoal.get(goalId)
+    if (bucket) bucket.push(asInt(r['id'], 0))
+    else byGoal.set(goalId, [asInt(r['id'], 0)])
+  }
+
+  let nextId = rawFreezes.reduce((max, r) => Math.max(max, asInt(r['id'], 0)), 0)
+  const out: Freeze[] = []
+  for (const r of rawFreezes) {
+    // Already task-level: nothing to translate.
+    if (r['subgoal_id'] != null && r['subgoal_id'] !== '') {
+      out.push(normaliseFreeze(r, today))
+      continue
+    }
+    const targets = byGoal.get(asInt(r['goal_id'], 0)) ?? []
+    for (const [i, subgoalId] of targets.entries()) {
+      out.push(
+        normaliseFreeze(
+          { ...r, subgoal_id: subgoalId, id: i === 0 ? r['id'] : ++nextId },
+          today,
+        ),
+      )
+    }
+  }
+  return out
 }
 
 /** An empty snapshot with the default areas in place. */

@@ -42,15 +42,15 @@ describe('weights', () => {
     expect(IMPORTANCE_WEIGHT).toEqual({ high: 4, medium: 2, low: 1 })
   })
 
-  it("comes from the task's own priority, not the goal above it", () => {
+  it("comes from the task's own priority", () => {
     expect(weightOf(subgoal({ importance: 'high' }))).toBe(4)
     expect(weightOf(subgoal({ importance: 'medium' }))).toBe(2)
     expect(weightOf(subgoal({ importance: 'low' }))).toBe(1)
   })
 
-  it('weighs two tasks under one goal differently', () => {
-    const light = subgoal({ id: 1, goal_id: 1, importance: 'low' })
-    const heavy = subgoal({ id: 2, goal_id: 1, importance: 'high' })
+  it('weighs two habits in one area differently', () => {
+    const light = subgoal({ id: 1, area_id: 1, importance: 'low' })
+    const heavy = subgoal({ id: 2, area_id: 1, importance: 'high' })
     expect(weightOf(light)).toBe(1)
     expect(weightOf(heavy)).toBe(4)
   })
@@ -298,7 +298,7 @@ describe('standing mode: rare cadences keep their place', () => {
     })
   })
 
-  it('contributes nothing while the goal is frozen', () => {
+  it('contributes nothing while the habit is paused', () => {
     const periods = [freeze({ start_date: '2026-01-01', end_date: null })]
     expect(tallyStanding(WEDNESDAYS, 2, TODAY, new Map(), periods)).toEqual({
       earned: 0,

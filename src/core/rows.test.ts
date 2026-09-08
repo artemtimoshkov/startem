@@ -159,9 +159,74 @@ describe('importing a JSON export', () => {
     expect(s.areas[0]!.id).toBe(3)
     expect(s.goals[0]!.id).toBe(41)
     expect(s.subgoals[0]!.id).toBe(108)
-    expect(s.subgoals[0]!.goal_id).toBe(41)
     expect(s.checkins[0]!.subgoal_id).toBe(108)
-    expect(s.freezes[0]!.goal_id).toBe(41)
+  })
+
+  /**
+   * The old three-tier export is the shape the store on the phone is already
+   * in, so reading it has to do the flattening §3 describes rather than
+   * dropping what it does not recognise.
+   */
+  it('flattens a goal-tiered export: the task keeps the area it scored against', () => {
+    const s = normaliseSnapshot(exported, TODAY)
+    expect(s.subgoals[0]!.area_id).toBe(3)
+    expect('goal_id' in s.subgoals[0]!).toBe(false)
+  })
+
+  it("re-points a goal's pause onto the habits it was actually pausing", () => {
+    const s = normaliseSnapshot(exported, TODAY)
+    // One task hung off goal 41, so its one period comes across whole — and
+    // keeps its id, so a device that already synced it sees no new row.
+    expect(s.freezes).toHaveLength(1)
+    expect(s.freezes[0]!.id).toBe(2)
+    expect(s.freezes[0]!.subgoal_id).toBe(108)
+  })
+
+  it('splits one goal-level pause across every habit under it', () => {
+    const many = {
+      ...exported,
+      subgoals: [
+        { id: 108, goal_id: 41, area_id: 3, title: 'A', cadence_type: 'daily' },
+        { id: 109, goal_id: 41, area_id: 3, title: 'B', cadence_type: 'daily' },
+      ],
+    }
+    const s = normaliseSnapshot(many, TODAY)
+    expect(s.freezes.map((f) => f.subgoal_id).sort()).toEqual([108, 109])
+    // Distinct ids, or the second would overwrite the first on the way in.
+    expect(new Set(s.freezes.map((f) => f.id)).size).toBe(2)
+  })
+
+  it('reads a task-level pause straight through, untouched', () => {
+    const s = normaliseSnapshot(
+      { ...exported, freezes: [{ id: 5, subgoal_id: 108, start_date: '2026-01-01' }] },
+      TODAY,
+    )
+    expect(s.freezes).toEqual([
+      { id: 5, subgoal_id: 108, start_date: '2026-01-01', end_date: null },
+    ])
+  })
+
+  it('is not fooled by `frozen`, which is no longer a goal status', () => {
+    const s = normaliseSnapshot(
+      { ...exported, goals: [{ id: 41, area_id: 3, status: 'frozen' }] },
+      TODAY,
+    )
+    expect(s.goals[0]!.status).toBe('active')
+    expect(s.goals[0]!.achieved_on).toBeNull()
+  })
+
+  it('dates a goal already reached, falling back to the day it was written', () => {
+    const s = normaliseSnapshot(
+      {
+        goals: [
+          { id: 1, area_id: 1, status: 'achieved', created_at: '2026-01-04' },
+          { id: 2, area_id: 1, status: 'achieved', created_at: '2026-01-04', achieved_on: '2026-06-01' },
+        ],
+      },
+      TODAY,
+    )
+    expect(s.goals[0]!.achieved_on).toBe('2026-01-04')
+    expect(s.goals[1]!.achieved_on).toBe('2026-06-01')
   })
 
   it('repairs an out-of-range monthly day on the way in', () => {

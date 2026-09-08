@@ -126,10 +126,10 @@ await step('AIRPLANE MODE: the star still computes', async () => {
 await step('AIRPLANE MODE: a deep link falls back to the cached shell', async () => {
   // The offline twin of §11's vercel.json rewrite: a navigation to a route that
   // was never a real file has to resolve to the shell.
-  await page.goto(`${BASE}/goals/43`, { waitUntil: 'domcontentloaded' })
+  await page.goto(`${BASE}/areas/3`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('h1', { timeout: 8000 })
   const h = await page.textContent('h1')
-  if (!h.includes('Startem v2')) throw new Error(`h1 offline: ${h}`)
+  if (!h.includes('Work')) throw new Error(`h1 offline: ${h}`)
 })
 
 await step('AIRPLANE MODE: ticking still writes', async () => {
@@ -149,7 +149,7 @@ await step('AIRPLANE MODE: ticking still writes', async () => {
 })
 
 await step('the SPA rewrite serves a deep link online too', async () => {
-  const status = await page.evaluate(async (base) => (await fetch(`${base}/goals/43`)).status, BASE)
+  const status = await page.evaluate(async (base) => (await fetch(`${base}/areas/3`)).status, BASE)
   if (status !== 200) throw new Error(`deep link → ${status}`)
 })
 

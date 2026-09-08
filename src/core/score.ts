@@ -39,8 +39,8 @@ export const BACKDATE_LIMIT_DAYS = 182
 
 /** Weekly history strip (§6). */
 export const WEEKLY_STRIP_WEEKS = 8
-/** Per-goal tracker grid (§6). */
-export const GOAL_GRID_WEEKS = 15
+/** Per-habit tracker grid (§6). */
+export const HABIT_GRID_WEEKS = 15
 /** Day-by-day calendar (§6). */
 export const CALENDAR_WEEKS = 26
 
@@ -50,6 +50,17 @@ export const QUARTER_MONTHS = [1, 4, 7, 10]
 /** Fixed monthly days are clamped to this range on write *and* on read (§4). */
 export const MIN_MONTHLY_DAY = 1
 export const MAX_MONTHLY_DAY = 28
+
+/**
+ * How many spokes the star will take (§7).
+ *
+ * The floor is one because an area can be deleted down to the last one and a
+ * one-spoke chart still draws. The ceiling is where the labels around the rim
+ * stop being readable on a phone, which is the only thing actually limiting
+ * the count — the geometry is `360 / count` either way (§6).
+ */
+export const MIN_AREAS = 1
+export const MAX_AREAS = 20
 
 // ---------------------------------------------------------------------------
 // Dates — local-time `YYYY-MM-DD` strings, Monday-first weekdays (§2)
@@ -157,7 +168,7 @@ export function eachDay(from: ISODate, to: ISODate): ISODate[] {
 // ---------------------------------------------------------------------------
 
 /**
- * A date is frozen when a period covers it. Note the asymmetry: `start_date`
+ * A date is paused when a period covers it. Note the asymmetry: `start_date`
  * is inclusive and `end_date` is **exclusive**, so unfreezing makes that same
  * day live again (§3).
  */
@@ -244,9 +255,11 @@ function onIntervalStep(action: Subgoal, date: ISODate): boolean {
 }
 
 /**
- * The one predicate everything rests on: does this action come due on this
- * date? `freezes` are the periods of the action's *goal* — a task with no goal
- * has none (§4).
+ * The one predicate everything rests on: does this habit come due on this
+ * date? `freezes` are the task's own pause periods (§4).
+ *
+ * A to-do (`cadence_type: 'once'`) is never "scheduled": it has one occurrence
+ * on one effective date, which `onceOccurrence` decides.
  */
 export function isScheduled(
   action: Subgoal,
@@ -277,6 +290,32 @@ export function isScheduled(
     default:
       return false
   }
+}
+
+// ---------------------------------------------------------------------------
+// Habits and to-dos (§3, §5)
+// ---------------------------------------------------------------------------
+
+/**
+ * A habit: something that repeats, and the only thing the star scores (§5).
+ *
+ * The distinction is read off `cadence_type` rather than stored beside it. A
+ * second column saying the same thing is a column that can disagree with the
+ * scheduling fields, and the scheduling fields are the ones the cadence rules
+ * actually walk.
+ */
+export function isHabit(task: Pick<Subgoal, 'cadence_type'>): boolean {
+  return task.cadence_type !== 'once'
+}
+
+/**
+ * A to-do: one thing, once. Kept alongside the habits because that is where
+ * the user already is, and kept **out of every score** because the star is a
+ * statement about habits — an errand jotted down and dropped should not move
+ * how well you are sleeping (§5).
+ */
+export function isTodo(task: Pick<Subgoal, 'cadence_type'>): boolean {
+  return task.cadence_type === 'once'
 }
 
 // ---------------------------------------------------------------------------
