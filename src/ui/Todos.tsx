@@ -6,7 +6,6 @@ import { useSnapshot } from './DataContext'
 import { Plus, TopBar } from './bits'
 import { TaskComposer } from './TaskComposer'
 import { TodoLine } from './Today'
-import { Link } from './router'
 
 /**
  * The five piles a to-do can be in, and what each is called on screen.
@@ -30,14 +29,7 @@ export function TodosScreen() {
 
   return (
     <div className="screen">
-      <TopBar
-        title="To-dos"
-        sub={
-          view.openCount === 0
-            ? 'nothing open'
-            : `${view.openCount} open${view.overdueCount > 0 ? ` · ${view.overdueCount} overdue` : ''}`
-        }
-      />
+      <TopBar title="To-dos" />
 
       {composing ? (
         <TaskComposer
@@ -50,22 +42,11 @@ export function TodosScreen() {
       ) : (
         <button type="button" className="add-task" onClick={() => setComposing(true)}>
           <span className="add-task-plus">
-            <Plus />
+            <Plus size={15} />
           </span>
           Add to-do
         </button>
       )}
-
-      {view.sections.length === 0 && !composing ? (
-        <div className="card">
-          <p className="empty">
-            Nothing on the list.
-            <br />
-            To-dos live here so they stay out of <Link to="/">the day&rsquo;s habits</Link> — and
-            out of the score.
-          </p>
-        </div>
-      ) : null}
 
       {view.sections.map((section) => (
         <div key={section.bucket}>
@@ -79,13 +60,6 @@ export function TodosScreen() {
           </div>
         </div>
       ))}
-
-      {view.sections.some((s) => s.bucket === 'done') ? (
-        <p className="empty" style={{ textAlign: 'left', padding: '14px 2px 0' }}>
-          Finished to-dos clear themselves after a fortnight. Nothing here counts towards the
-          star — that is the habits&rsquo; job.
-        </p>
-      ) : null}
     </div>
   )
 }

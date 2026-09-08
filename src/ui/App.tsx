@@ -3,6 +3,7 @@
 import './theme.css'
 import { DataProvider, useData, useSnapshot } from './DataContext'
 import { RouterProvider, Link, useMatch, usePath } from './router'
+import { TopBar } from './bits'
 import { TodayScreen } from './Today'
 import { TodosScreen } from './Todos'
 import { TaskScreen } from './Task'
@@ -24,20 +25,14 @@ function Screens() {
   if (storageError) {
     return (
       <div className="screen">
-        <div className="card card-pad">
-          <h1 style={{ fontSize: 18, margin: '0 0 8px' }}>No room to store anything</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: '0 0 8px' }}>
-            Startem keeps all of your data on the device, so it cannot run without somewhere to
-            put it. This browser is refusing.
-          </p>
-          <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: 0 }}>
-            Private browsing and “block all cookies” are the usual causes. A normal window, or
-            installing the app to the home screen, will fix it.
-          </p>
-          <p style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 0 }}>
-            {storageError}
-          </p>
-        </div>
+        <TopBar title="No room to store anything" />
+        <p style={{ color: 'var(--text-secondary)', fontSize: 14.5, margin: 0 }}>
+          Startem keeps its data on the device. Private browsing and “block all cookies” are the
+          usual causes; a normal window, or the app on your home screen, will fix it.
+        </p>
+        <p style={{ color: 'var(--text-tertiary)', fontSize: 12, marginTop: 12 }}>
+          {storageError}
+        </p>
       </div>
     )
   }
@@ -45,14 +40,12 @@ function Screens() {
   if (loading) {
     return (
       <div className="screen">
-        <p className="empty">Loading…</p>
+        <div className="spinner" role="status" aria-label="Loading" />
       </div>
     )
   }
 
   switch (hit?.pattern) {
-    case '/':
-      return <TodayScreen />
     case '/todos':
       return <TodosScreen />
     case '/tasks/:id':
@@ -61,14 +54,10 @@ function Screens() {
       return <StarScreen />
     case '/areas/:id':
       return <AreaScreen areaId={Number(hit.params['id'])} />
+    // '/' and anything unrecognised: the day's list. A URL nobody can type on
+    // a phone does not deserve a dead-end screen explaining itself.
     default:
-      return (
-        <div className="screen">
-          <p className="empty">
-            Nothing here. <Link to="/">Back to today</Link>
-          </p>
-        </div>
-      )
+      return <TodayScreen />
   }
 }
 
@@ -76,8 +65,11 @@ function Screens() {
  * Three tabs, and they are the three things the app is: the habits you keep
  * today, the errands parked alongside them, and where all of it leaves you.
  *
- * The to-do tab carries a count when something is late, because that tab is
- * the only place a deadline is visible and a silent one would be missed.
+ * Icon only. Three drawn glyphs at this size need no captions, and the labels
+ * were the last of the app's belt-and-braces text; the screen each one opens
+ * says what it is at the top. The to-do tab still carries a count when
+ * something is late, because that tab is the only place a deadline is visible
+ * and a silent one would be missed.
  */
 function TabBar() {
   const { loading, storageError } = useData()
@@ -96,17 +88,32 @@ function Tabs() {
   return (
     <nav className="tabbar" aria-label="Main">
       <div className="tabbar-inner">
-        <Link to="/" className="tab" aria-current={active === '/' ? 'page' : undefined}>
-          <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6">
-            <path d="M3.2 6.2l1.7 1.7 3-3M3.2 13.2l1.7 1.7 3-3M10.5 6.5h6.3M10.5 13.5h6.3" strokeLinecap="round" strokeLinejoin="round" />
+        <Link
+          to="/"
+          className="tab"
+          aria-label="Today"
+          aria-current={active === '/' ? 'page' : undefined}
+        >
+          {/* A calendar with today's square filled: the day's list, not a
+              generic list. */}
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={active === '/' ? 2.1 : 1.7} strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3.5" y="5" width="17" height="15.5" rx="3.5" />
+            <path d="M3.5 9.5h17M8 3.5v3M16 3.5v3" />
+            <rect x="7.5" y="12.5" width="4.5" height="4.5" rx="1.4" fill="currentColor" stroke="none" />
           </svg>
-          Today
         </Link>
-        <Link to="/todos" className="tab" aria-current={active === '/todos' ? 'page' : undefined}>
+        <Link
+          to="/todos"
+          className="tab"
+          aria-label={
+            todos.overdueCount > 0 ? `To-dos, ${todos.overdueCount} overdue` : 'To-dos'
+          }
+          aria-current={active === '/todos' ? 'page' : undefined}
+        >
           <span className="tab-icon">
-            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <path d="M5.5 3.5h9a1 1 0 011 1v11a1 1 0 01-1 1h-9a1 1 0 01-1-1v-11a1 1 0 011-1z" strokeLinejoin="round" />
-              <path d="M7.6 8.4l1.4 1.4 3-3.2" strokeLinecap="round" strokeLinejoin="round" />
+            {/* Ticked lines: a list of errands. */}
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={active === '/todos' ? 2.1 : 1.7} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3.5 7l2 2 3.5-3.5M3.5 16.5l2 2 3.5-3.5M12.5 7.5h8M12.5 17h8" />
             </svg>
             {todos.overdueCount > 0 ? (
               <span className="tab-badge" aria-hidden="true">
@@ -114,16 +121,16 @@ function Tabs() {
               </span>
             ) : null}
           </span>
-          To-dos
-          {todos.overdueCount > 0 ? (
-            <span className="sr-only">, {todos.overdueCount} overdue</span>
-          ) : null}
         </Link>
-        <Link to="/star" className="tab" aria-current={active === '/star' ? 'page' : undefined}>
-          <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6">
-            <path d="M10 2.5l6.5 4.7-2.5 7.6h-8L3.5 7.2z" strokeLinejoin="round" />
+        <Link
+          to="/star"
+          className="tab"
+          aria-label="Star"
+          aria-current={active === '/star' ? 'page' : undefined}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill={active === '/star' ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round">
+            <path d="M12 3l2.6 5.6 6.1.8-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.3 9.4l6.1-.8z" />
           </svg>
-          Star
         </Link>
       </div>
     </nav>

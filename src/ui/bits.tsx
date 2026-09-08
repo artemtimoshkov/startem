@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { CheckinStatus, Importance } from '../core'
-import { Link, back } from './router'
+import { back } from './router'
 
 export function Tick({ size = 14 }: { size?: number }) {
   return (
@@ -50,46 +50,68 @@ export function Chevron() {
 }
 
 /**
- * Tick / cross pair for one item. Ticking again clears the row back to
- * unresolved; crossing out writes `skipped`, an immediate miss, and is
- * equally reversible (§7).
+ * The tick. It wears the item's priority as the colour of its ring, which is
+ * what the rows lost their left-edge stripe and their priority dot to:
+ * priority belongs on the thing you tap, not beside it.
+ *
+ * Ticking again clears the row back to unresolved (§7).
  */
-export function CheckControls({
+export function TickButton({
+  status,
+  label,
+  importance,
+  disabled,
+  onTick,
+}: {
+  status: CheckinStatus | null
+  label: string
+  importance?: Importance
+  disabled?: boolean
+  onTick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className={`check${importance ? ` imp-${importance}` : ''}${status === 'done' ? ' on' : ''}`}
+      aria-pressed={status === 'done'}
+      aria-label={status === 'done' ? `Untick ${label}` : `Tick ${label}`}
+      disabled={disabled}
+      onClick={onTick}
+    >
+      {status === 'done' ? <Tick /> : null}
+    </button>
+  )
+}
+
+/**
+ * Crossing out: an immediate miss, and equally reversible (§7).
+ *
+ * It sits at the far end of the row rather than beside the tick. Two rings
+ * side by side made every row ask a question twice; the one you mean is the
+ * tick, and the other belongs out of the way.
+ */
+export function CrossButton({
   status,
   label,
   disabled,
-  onTick,
   onCross,
 }: {
   status: CheckinStatus | null
   label: string
   disabled?: boolean
-  onTick: () => void
   onCross: () => void
 }) {
   return (
-    <>
-      <button
-        type="button"
-        className={`check${status === 'done' ? ' on' : ''}`}
-        aria-pressed={status === 'done'}
-        aria-label={status === 'done' ? `Untick ${label}` : `Tick ${label}`}
-        disabled={disabled}
-        onClick={onTick}
-      >
-        {status === 'done' ? <Tick /> : null}
-      </button>
-      <button
-        type="button"
-        className={`check cross${status === 'skipped' ? ' on' : ''}`}
-        aria-pressed={status === 'skipped'}
-        aria-label={status === 'skipped' ? `Restore ${label}` : `Cross out ${label}`}
-        disabled={disabled}
-        onClick={onCross}
-      >
-        <Cross />
-      </button>
-    </>
+    <button
+      type="button"
+      className={`check cross${status === 'skipped' ? ' on' : ''}`}
+      aria-pressed={status === 'skipped'}
+      aria-label={status === 'skipped' ? `Restore ${label}` : `Cross out ${label}`}
+      disabled={disabled}
+      onClick={onCross}
+    >
+      <Cross />
+    </button>
   )
 }
 
@@ -118,10 +140,6 @@ export function ImportancePill({ importance, frozen }: { importance: Importance;
   )
 }
 
-export function Stripe({ importance, frozen }: { importance: Importance; frozen?: boolean }) {
-  return <span className={`row-stripe ${frozen ? 'bg-frozen' : `bg-${importance}`}`} aria-hidden="true" />
-}
-
 /** A score out of 10, or an em dash for null — nothing scheduled has no opinion. */
 export function ScoreBadge({ score }: { score: number | null }) {
   return (
@@ -135,25 +153,32 @@ export function Percent({ rate }: { rate: number | null }) {
   return <span className="pct">{rate == null ? '—' : `${Math.round(rate * 100)}%`}</span>
 }
 
-/** The standalone back link, for a screen whose TopBar carries other things. */
-export function TopBarBack({ to }: { to: string }) {
+/** The back arrow. Icon only: an arrow pointing left needs no caption. */
+function BackButton({ to }: { to: string }) {
   return (
-    <button type="button" className="backlink" onClick={() => back(to)}>
-      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+    <button type="button" className="backlink" aria-label="Back" onClick={() => back(to)}>
+      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
         <path
-          d="M10 3.5L5 8l5 4.5"
+          d="M11.5 4.5L6 10l5.5 5.5"
           fill="none"
           stroke="currentColor"
-          strokeWidth="1.8"
+          strokeWidth="1.9"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
       </svg>
-      Back
     </button>
   )
 }
 
+/**
+ * The screen header: a back arrow if there is somewhere to go, the title, and
+ * whatever one control the screen needs on the right.
+ *
+ * It is sticky, and the back arrow lives inside it rather than above it — an
+ * arrow that scrolls away while the title stays is the sort of thing that only
+ * reads as a web page.
+ */
 export function TopBar({
   title,
   sub,
@@ -166,29 +191,13 @@ export function TopBar({
   backTo?: string
 }) {
   return (
-    <>
-      {backTo !== undefined ? (
-        <button type="button" className="backlink" onClick={() => back(backTo)}>
-          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-            <path
-              d="M10 3.5L5 8l5 4.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          Back
-        </button>
-      ) : null}
-      <div className="topbar">
-        <h1>{title}</h1>
-        {sub ? <span className="sub">{sub}</span> : null}
-        <span className="spacer" />
-        {right}
-      </div>
-    </>
+    <div className="topbar">
+      {backTo !== undefined ? <BackButton to={backTo} /> : null}
+      <h1>{title}</h1>
+      {sub ? <span className="sub">{sub}</span> : null}
+      <span className="spacer" />
+      {right}
+    </div>
   )
 }
 
@@ -247,23 +256,6 @@ export function useToast() {
   }
 }
 
-export function ListLink({
-  to,
-  children,
-  ariaLabel,
-}: {
-  to: string
-  children: ReactNode
-  ariaLabel?: string
-}) {
-  return (
-    <Link to={to} className="list-link" aria-label={ariaLabel}>
-      {children}
-      <Chevron />
-    </Link>
-  )
-}
-
 /** `Mon 24 Aug`, from a `YYYY-MM-DD` string — parsed as local, never UTC. */
 export function formatDate(date: string, opts: Intl.DateTimeFormatOptions = {}): string {
   const [y, m, d] = date.split('-').map(Number)
@@ -306,6 +298,16 @@ export function Target({ size = 15 }: { size?: number }) {
     <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden="true" fill="none" stroke="currentColor">
       <circle cx="8" cy="8" r="5.6" strokeWidth="1.4" />
       <circle cx="8" cy="8" r="2.2" strokeWidth="1.4" />
+    </svg>
+  )
+}
+
+/** Editing, as an icon: the areas editor hangs off this on the star. */
+export function Pencil({ size = 17 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 20 20" width={size} height={size} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13.4 3.4l3.2 3.2-9 9-4 .8.8-4z" />
+      <path d="M11.6 5.2l3.2 3.2" />
     </svg>
   )
 }

@@ -45,9 +45,7 @@ export function ServiceWorkerNotice() {
 
   return (
     <div className="toast" role="status" aria-live="polite">
-      {notice === 'updated'
-        ? 'Updated — the new version loads next time you open Startem.'
-        : 'Ready to work offline.'}
+      {notice === 'updated' ? 'Updated — loads on next launch' : 'Ready offline'}
     </div>
   )
 }

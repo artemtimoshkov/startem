@@ -506,6 +506,16 @@ export interface StarView {
   vertices: StarVertex[]
   /** Faint rings at 2, 4, 6, 8, 10 (§6). */
   rings: number[]
+  /**
+   * The mean of the *scored* areas — the one number the chart resolves to, and
+   * what the star screen shows beside its title (§6). Unscored areas are left
+   * out rather than counted as zero: an area with nothing scheduled has no
+   * opinion (§5), and averaging its silence in as a nought would drag the
+   * whole star down for work nobody signed up to.
+   */
+  mean: number | null
+  /** `"7.4"`, or an em dash when nothing is scored. */
+  meanLabel: string
   /** The chart is the main data display, so it needs a text description (§8). */
   description: string
 }
@@ -540,11 +550,19 @@ export function buildStar(snapshot: Snapshot, today: ISODate): StarView {
     }
   })
 
+  const scored = vertices.filter((v) => v.score != null)
+  const mean =
+    scored.length === 0
+      ? null
+      : Math.round((scored.reduce((sum, v) => sum + v.score!, 0) / scored.length) * 10) / 10
+
   const described = vertices.map((v) => `${v.name} ${v.label}`).join(', ')
   return {
     date: today,
     vertices,
     rings: [2, 4, 6, 8, 10],
+    mean,
+    meanLabel: mean == null ? '—' : mean.toFixed(1),
     description: described
       ? `Area scores out of 10 over the last ${SCORING_WINDOW_DAYS} days: ${described}.`
       : 'No areas to score.',

@@ -97,16 +97,12 @@ export function useInstall(): InstallState {
 /** Share → Add to Home Screen, the only route iOS offers. */
 export function IOSInstructions() {
   return (
-    <ol style={{ margin: '8px 0 0', paddingLeft: 20, fontSize: 13.5, lineHeight: 1.6 }}>
+    <ol style={{ margin: '6px 0 0', paddingLeft: 20, fontSize: 13.5, lineHeight: 1.7 }}>
       <li>
-        Tap <ShareGlyph /> Share, at the bottom of Safari.
+        Tap <ShareGlyph /> in Safari.
       </li>
       <li>
-        Scroll down and choose <strong>Add to Home Screen</strong>.
-      </li>
-      <li>
-        Tap <strong>Add</strong>. Startem opens full-screen from then on, and works with no
-        signal.
+        Choose <strong>Add to Home Screen</strong>.
       </li>
     </ol>
   )
@@ -137,6 +133,11 @@ function ShareGlyph() {
  * The dismissible card on Today — the only install surface, now that the
  * settings screen is gone. Hidden once the app is installed, and once
  * dismissed it stays dismissed.
+ *
+ * On a browser that can install by itself this is a button and nothing else.
+ * iOS has no such button, so it gets the two taps that do work — and that is
+ * the only place in the app that spells anything out, because there is no
+ * affordance to point at instead.
  */
 export function InstallCard() {
   const { installed, ios, promptable, install, dismissed, dismiss } = useInstall()
@@ -144,27 +145,24 @@ export function InstallCard() {
   if (!promptable && !ios) return null
 
   return (
-    <div className="card card-pad" style={{ marginTop: 12 }}>
-      <p className="card-title" style={{ marginBottom: 6 }}>
-        Put Startem on your home screen
-      </p>
-      <p style={{ margin: '0 0 10px', fontSize: 13.5, color: 'var(--text-secondary)' }}>
-        It opens full-screen, keeps its own copy of your data, and works with no signal.
+    <div className="card-pad" style={{ marginTop: 22 }}>
+      <p className="card-title" style={{ marginBottom: promptable ? 10 : 4 }}>
+        Add to home screen
       </p>
       {promptable ? (
         <div className="btn-row">
-          <button type="button" className="btn btn-primary btn-sm" onClick={install}>
+          <button type="button" className="btn btn-sm btn-primary" onClick={install}>
             Install
           </button>
-          <button type="button" className="btn btn-quiet btn-sm" onClick={dismiss}>
+          <button type="button" className="btn btn-sm btn-quiet" onClick={dismiss}>
             Not now
           </button>
         </div>
       ) : (
         <>
           <IOSInstructions />
-          <div className="btn-row" style={{ marginTop: 10 }}>
-            <button type="button" className="btn btn-quiet btn-sm" onClick={dismiss}>
+          <div className="btn-row" style={{ marginTop: 12 }}>
+            <button type="button" className="btn btn-sm btn-quiet" onClick={dismiss}>
               Got it
             </button>
           </div>

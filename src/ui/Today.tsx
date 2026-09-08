@@ -12,13 +12,12 @@ import {
 import { toggleDone, toggleSkipped } from '../db/repo'
 import { useSnapshot } from './DataContext'
 import {
-  CheckControls,
+  CrossButton,
+  TickButton,
   Chevron,
   Flame,
-  ImportanceDot,
   Percent,
   Plus,
-  Stripe,
   TopBar,
   formatDate,
 } from './bits'
@@ -35,7 +34,7 @@ import { Link, navigate } from './router'
  * which is that an errand already overdue has earned a line here.
  */
 export function TodayScreen() {
-  const { snapshot, index, today } = useSnapshot()
+  const { snapshot, today } = useSnapshot()
   const view = buildToday(snapshot, today)
   const todos = buildTodos(snapshot, today)
   const pct = view.target === 0 ? null : view.doneCount / view.target
@@ -50,7 +49,7 @@ export function TodayScreen() {
       <TopBar title="Today" sub={formatDate(today, { year: undefined })} />
 
       {view.total > 0 ? (
-        <div className="card card-pad">
+        <div className="card-pad">
           <div className="progress-head">
             <span className="big num">
               {view.doneCount}
@@ -64,11 +63,6 @@ export function TodayScreen() {
           <div className="bar">
             <span style={{ width: `${(pct ?? 0) * 100}%` }} />
           </div>
-          {view.skippedCount > 0 ? (
-            <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>
-              {view.skippedCount} crossed out — removed from the target, not counted against you.
-            </p>
-          ) : null}
         </div>
       ) : null}
 
@@ -77,22 +71,11 @@ export function TodayScreen() {
       ) : (
         <button type="button" className="add-task" onClick={() => setComposing(true)}>
           <span className="add-task-plus">
-            <Plus />
+            <Plus size={15} />
           </span>
           Add habit
         </button>
       )}
-
-      {view.groups.length === 0 && !composing ? (
-        <div className="card">
-          <p className="empty">
-            No habits due today.
-            <br />
-            Add one above, or open <Link to="/star">the star</Link> to see where each area
-            stands.
-          </p>
-        </div>
-      ) : null}
 
       {view.groups.map((group) => (
         <div key={group.area_id}>
@@ -115,12 +98,7 @@ export function TodayScreen() {
       */}
       {dueTodos.length > 0 ? (
         <>
-          <p className="section-label section-label-row">
-            To-dos
-            <Link to="/todos" className="section-more">
-              All {todos.openCount} →
-            </Link>
-          </p>
+          <p className="section-label">To-dos</p>
           <div className="card">
             {dueTodos.map((item) => (
               <TodoLine key={item.subgoal_id} item={item} today={today} />
@@ -130,12 +108,6 @@ export function TodayScreen() {
       ) : null}
 
       <NotToday due={new Set(view.items.map((i) => i.subgoal_id))} />
-
-      {index.habits.length > 0 ? (
-        <p style={{ marginTop: 20, fontSize: 13 }}>
-          <Link to="/star">See where you stand →</Link>
-        </p>
-      ) : null}
 
       <InstallCard />
     </div>
@@ -177,7 +149,6 @@ function NotToday({ due }: { due: Set<number> }) {
                 className="row row-button"
                 onClick={() => navigate(`/tasks/${task.id}`)}
               >
-                <Stripe importance={task.importance} frozen={paused} />
                 <div className="row-body">
                   <div className="row-title">{task.title}</div>
                   <div className="row-meta">
@@ -208,12 +179,11 @@ function HabitRow({ item, today }: { item: TodayItem; today: string }) {
 
   return (
     <div className={`row${cls}`}>
-      <Stripe importance={item.importance} />
-      <CheckControls
+      <TickButton
         status={item.status}
         label={item.title}
+        importance={item.importance}
         onTick={() => void toggleDone(item.subgoal_id, today, item.status)}
-        onCross={() => void toggleSkipped(item.subgoal_id, today, item.status)}
       />
       <div className="row-body">
         <button
@@ -224,7 +194,6 @@ function HabitRow({ item, today }: { item: TodayItem; today: string }) {
           {item.title}
         </button>
         <div className="row-meta">
-          <ImportanceDot importance={item.importance} />
           <span>{task ? taskRepeatLabel(task, { short: true }) : ''}</span>
           {item.time ? (
             <>
@@ -247,6 +216,11 @@ function HabitRow({ item, today }: { item: TodayItem; today: string }) {
           ) : null}
         </div>
       </div>
+      <CrossButton
+        status={item.status}
+        label={item.title}
+        onCross={() => void toggleSkipped(item.subgoal_id, today, item.status)}
+      />
     </div>
   )
 }
@@ -258,12 +232,11 @@ export function TodoLine({ item, today }: { item: TodoItem; today: string }) {
 
   return (
     <div className={`row${cls}`}>
-      <Stripe importance={item.importance} />
-      <CheckControls
+      <TickButton
         status={item.status}
         label={item.title}
+        importance={item.importance}
         onTick={() => void toggleDone(item.subgoal_id, today, item.status)}
-        onCross={() => void toggleSkipped(item.subgoal_id, today, item.status)}
       />
       <div className="row-body">
         <button
@@ -274,7 +247,6 @@ export function TodoLine({ item, today }: { item: TodoItem; today: string }) {
           {item.title}
         </button>
         <div className="row-meta">
-          <ImportanceDot importance={item.importance} />
           <Link to={`/areas/${item.area_id}`}>{item.areaName}</Link>
           {item.due_date ? (
             <>
@@ -293,6 +265,11 @@ export function TodoLine({ item, today }: { item: TodoItem; today: string }) {
           ) : null}
         </div>
       </div>
+      <CrossButton
+        status={item.status}
+        label={item.title}
+        onCross={() => void toggleSkipped(item.subgoal_id, today, item.status)}
+      />
     </div>
   )
 }
