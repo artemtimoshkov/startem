@@ -429,11 +429,8 @@ export function TaskComposer({
             className="btn btn-sm btn-quiet"
             onClick={() => void archiveTask(taskId).then(() => onSaved(taskId))}
           >
-            Archive this task
+            Archive
           </button>
-          <span className="composer-foot-note">
-            Archived, never deleted — its check-ins still describe real days.
-          </span>
         </div>
       ) : null}
     </div>
@@ -491,7 +488,6 @@ function AreaPicker({
           />
         )
       })}
-      <p className="sheet-note">Areas are added and removed from the star.</p>
     </Sheet>
   )
 }
@@ -682,9 +678,6 @@ function TimePicker({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
-        <p className="sheet-note" style={{ padding: '8px 0 0' }}>
-          A reminder for you, not a deadline: scoring is per day either way (§2).
-        </p>
       </div>
     </Sheet>
   )
@@ -767,11 +760,6 @@ function RepeatPicker({
         selected={current === 'custom'}
         onClick={() => setCustom(buildRepeat('custom', date, repeat))}
       />
-      {date == null ? (
-        <p className="sheet-note">
-          With no date a repeat starts from the day the task was created.
-        </p>
-      ) : null}
     </Sheet>
   )
 }
@@ -947,9 +935,7 @@ function CustomRepeat({
                 }
               />
               <p className="sheet-note" style={{ padding: '6px 0 0' }}>
-                Held to 1–28: days 29–31 do not exist in every month, so a task on “31” would
-                quietly vanish for five months a year. For real month-end, use{' '}
-                <strong>last</strong> weekday.
+                1–28. For month-end, use <strong>last</strong> weekday.
               </p>
             </div>
           ) : (
@@ -1025,9 +1011,6 @@ function CustomRepeat({
               value={spec.repeat_until}
               onChange={(e) => onChange({ ...spec, repeat_until: e.target.value })}
             />
-            <p className="sheet-note" style={{ padding: '6px 0 0' }}>
-              Inclusive — the task still comes due on that day.
-            </p>
           </>
         ) : null}
       </div>

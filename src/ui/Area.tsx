@@ -30,7 +30,6 @@ import {
   Percent,
   Plus,
   ScoreBadge,
-  Stripe,
   TopBar,
   Target,
   Tick,
@@ -49,9 +48,6 @@ export function AreaScreen({ areaId }: { areaId: number }) {
     return (
       <div className="screen">
         <TopBar title="Area" backTo="/star" />
-        <div className="card">
-          <p className="empty">That area no longer exists.</p>
-        </div>
       </div>
     )
   }
@@ -67,24 +63,19 @@ export function AreaScreen({ areaId }: { areaId: number }) {
 
   return (
     <div className="screen">
-      <TopBar title={area.name} backTo="/star" />
+      <TopBar
+        title={area.name}
+        backTo="/star"
+        right={<ScoreBadge score={vertex?.score ?? null} />}
+      />
 
-      <div className="card card-pad">
-        <div className="progress-head">
-          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            Last 28 days · {habits.length} habit{habits.length === 1 ? '' : 's'}
-          </span>
-          <ScoreBadge score={vertex?.score ?? null} />
-        </div>
+      <div className="card-pad">
         <WeekStrip bars={strip} />
       </div>
 
       <Goals areaId={areaId} />
 
-      <p className="section-label section-label-row">
-        Habits
-        {habits.length > 0 ? <span className="section-more">{habits.length}</span> : null}
-      </p>
+      <p className="section-label">Habits</p>
 
       {composing ? (
         <TaskComposer
@@ -95,9 +86,9 @@ export function AreaScreen({ areaId }: { areaId: number }) {
       ) : (
         <button type="button" className="add-task" onClick={() => setComposing(true)}>
           <span className="add-task-plus">
-            <Plus />
+            <Plus size={15} />
           </span>
-          Add habit to {area.name}
+          Add habit
         </button>
       )}
 
@@ -113,7 +104,6 @@ export function AreaScreen({ areaId }: { areaId: number }) {
                 className="row row-button"
                 onClick={() => navigate(`/tasks/${task.id}`)}
               >
-                <Stripe importance={task.importance} frozen={paused} />
                 <div className="row-body">
                   <div className="row-title">{task.title}</div>
                   <div className="row-meta">
@@ -145,7 +135,7 @@ export function AreaScreen({ areaId }: { areaId: number }) {
 
       {todos.length > 0 ? (
         <>
-          <p className="section-label">To-dos here · not scored</p>
+          <p className="section-label">To-dos</p>
           <div className="card">
             {todos.map((task) => (
               <TodoLine
@@ -177,7 +167,8 @@ export function AreaScreen({ areaId }: { areaId: number }) {
 // ---------------------------------------------------------------------------
 
 /**
- * "What are you aiming for?" — the first thing on the area screen.
+ * **Goals** — the first thing on the area screen, because they are what the
+ * area is for.
  *
  * A goal is written, read and retired inline. There is no goal *screen* any
  * more, because there is nothing to put on one: a goal owns no tasks, carries
@@ -205,17 +196,9 @@ function Goals({ areaId }: { areaId: number }) {
 
   return (
     <>
-      <p className="section-label">What are you aiming for?</p>
+      <p className="section-label">Goals</p>
 
       <div className="card">
-        {active.length === 0 && achieved.length === 0 ? (
-          <p className="empty" style={{ padding: '16px 16px 10px' }}>
-            No aims written down yet. &ldquo;Bench 100 kg&rdquo;, &ldquo;sleep before
-            midnight&rdquo;, &ldquo;wake at the same time every day&rdquo; — the habits below are
-            how you get there.
-          </p>
-        ) : null}
-
         {active.map((goal) => (
           <GoalRow
             key={goal.id}
@@ -233,7 +216,7 @@ function Goals({ areaId }: { areaId: number }) {
             className="goal-add-input"
             value={adding}
             aria-label="New goal"
-            placeholder="Add a goal…"
+            placeholder="Add goal"
             enterKeyHint="done"
             onChange={(e) => setAdding(e.target.value)}
           />
@@ -247,7 +230,7 @@ function Goals({ areaId }: { areaId: number }) {
 
       {achieved.length > 0 ? (
         <>
-          <p className="section-label">Reached · {achieved.length}</p>
+          <p className="section-label">Reached</p>
           <div className="card">
             {achieved.map((goal) => (
               <GoalRow
@@ -326,14 +309,14 @@ function GoalRow({
             className="textarea"
             value={draft.description}
             aria-label="What reaching it looks like"
-            placeholder="What reaching it looks like."
+            placeholder="What reaching it looks like"
             onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
             onBlur={save}
           />
           {confirming ? (
             <InlineConfirm
-              question={`Remove “${goal.title}”? The habits in this area are untouched — a goal holds none of them.`}
-              confirmLabel="Remove it"
+              question={`Remove “${goal.title}”? The habits in this area are untouched.`}
+              confirmLabel="Remove"
               onConfirm={() => void deleteGoal(goal.id)}
               onCancel={() => setConfirming(false)}
             />
@@ -344,7 +327,7 @@ function GoalRow({
                 className="btn btn-sm btn-danger"
                 onClick={() => setConfirming(true)}
               >
-                Remove goal
+                Remove
               </button>
             </div>
           )}

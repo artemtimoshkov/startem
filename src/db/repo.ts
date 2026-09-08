@@ -158,7 +158,7 @@ export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<nu
   })
 }
 
-/** The one-line create behind the area screen's "What are you aiming for?". */
+/** The one-line create behind the area screen's Goals list. */
 export async function createGoal(
   area_id: number,
   title: string,

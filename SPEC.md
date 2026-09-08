@@ -356,7 +356,9 @@ Every live **habit** due today, **sorted heaviest first** so the day's most impo
 
 A to-do is **never** in this list, pending or done (§1). The screen carries one red affordance — **Add habit**, which opens the composer in place, on Habit (§7) — and below the day's groups sits a collapsed **Not due today** list of every other habit that exists. Without it, a habit set to "every Monday" and added on a Wednesday would vanish the instant it was saved, since the day's list is the only list.
 
-Under all of that, and only when there is something to show, sits a separate **To-dos** block: the open to-dos that are due today or already overdue, with a way through to the full list. It is the one place the two lists touch, it is visibly its own section, and it never touches the day's count.
+Under all of that, and only when there is something to show, sits a separate **To-dos** block: the open to-dos that are due today or already overdue. It is the one place the two lists touch, it is visibly its own section, and it never touches the day's count.
+
+An empty day draws **nothing** — no card explaining that there is nothing due. "Add habit" is on screen either way, and it says everything the paragraph did (§8).
 
 ### The to-do list
 
@@ -366,21 +368,25 @@ The to-do tab carries a **badge with the overdue count**, because that tab is th
 
 ### The star
 
-A radar chart, one vertex per area, first at twelve o'clock and going clockwise. Faint rings at 2, 4, 6, 8, 10. Vertices are interactive — clicking one opens that area. A null score draws at the midpoint with a hollow dot and an em-dash label.
+A radar chart, one vertex per area, first at twelve o'clock and going clockwise. Faint rings at 2, 4, 6, 8, 10, the outermost a shade stronger because the shape is read against it. The shape is filled with a radial wash of the accent, densest in the middle, and outlined in it. Vertices are interactive — tapping one opens that area. A null score draws at the midpoint with a hollow dot and an em-dash label.
 
 ```
 angle(i) = -90° + (360° / count) * i
 radius(i) = R * score(i) / 10
 ```
 
-The count is whatever the user has left it at (§3, §7) — the geometry is derived from it, so adding or removing a spoke simply redraws the chart. It must hold at one spoke and at twenty, not only at ten.
+The count is whatever the user has left it at (§3, §7) — the geometry is derived from it, so adding or removing a spoke simply redraws the chart. It must hold at one spoke and at twenty, not only at ten. Three scored areas make a polygon; two make a line between them; one makes only its own dot.
+
+**The chart is the whole screen.** The areas are *not* repeated as a list underneath it — the list said the same thing twice and pushed the picture off the top — so a vertex is the only way into an area, and each one carries its area's name and score beside the dot. A name longer than fourteen characters is cut with an ellipsis in the chart only: at ten spokes on a phone, a long label runs off the side. There is no caption naming the window either; twenty-eight days is what every number in the app means (§5).
+
+`buildStar` also returns a **mean** of the *scored* areas — an unscored area is left out rather than counted as a zero, because nothing scheduled has no opinion (§5). It is drawn beside the screen title, where the area screen keeps its own score, and deliberately not in the middle of the ring: a low mean makes a small shape, and a number in the centre would sit on top of the very shape it describes.
 
 ### The area screen
 
 The one screen where goals are read, and the order on it is the argument the redesign rests on:
 
-1. the area's score and its eight-week strip;
-2. **"What are you aiming for?"** — the goals, active first, reached below, each written and retired inline;
+1. the area's score, beside the title, and its eight-week strip;
+2. **Goals** — active first, reached below, each written and retired inline;
 3. **Habits** — every habit in the area with its cadence, its rate and its streak;
 4. the open to-dos parked in this area, last and unscored.
 
@@ -427,10 +433,10 @@ The day detail view includes pending items — it's a checklist, so it must show
 | Pick a repeat | The repeat sheet opens from the date sheet's footer and lists the presets. Picking one **is** the whole answer — "every day" or "every week on Monday" says when the habit lands without a day out of the calendar as well — so it commits and **closes the pickers outright**, unlike picking a date. **Back**, bottom-left in the footer and in thumb reach on a phone, returns to the date sheet; the ✕, the backdrop and Escape close the stack. **Custom…** opens a sub-sheet with the same bottom-left Back, and its Save commits and closes the same way. |
 | Edit a task | The same composer, opened on the task from its own screen. There is no second form to keep in step with the first. |
 | Archive a task | Removes it from the interface; the row and its check-ins stay. |
-| Write a goal | One line on the **area screen**, under "What are you aiming for?". A goal has no screen of its own, because there is nothing to put on one. |
+| Write a goal | One line on the **area screen**, under **Goals**. A goal has no screen of its own, because there is nothing to put on one. |
 | Reach a goal | One tap on its tick: `status` becomes `achieved` and `achieved_on` is set to today. Reopening it clears that date — a goal put back in play must not still claim it was reached in March. |
 | Edit / remove a goal | Tap it to expand: title, description, and Remove. Removing tombstones it and moves nothing else. Confirm inline — never with a browser dialog. |
-| Add an area | **Edit** on the star, then a name. It lands at the end of the ring and the chart redraws around it. Ceiling of **20**. |
+| Add an area | The **pencil** on the star, then a name. It lands at the end of the ring and the chart redraws around it. Ceiling of **20**. |
 | Rename an area | The same edit mode, in place. Committed on blur rather than on every keystroke: each write re-reads the whole store and rebuilds the star, and a name is not worth doing that once per letter. A blank name is refused. |
 | Reorder an area | Two arrows per row, not a drag. Dragging a list item on a touch screen needs either a library — every kilobyte of which is precached for offline use (§9) — or a hand-rolled gesture that fights the page scroll. Arrows always work, including for a keyboard and a screen reader. |
 | Remove an area | Tombstones it, **archives** its habits and tombstones its goals, then compacts the positions behind it so the ring has no gap. The confirmation says out loud what goes with it. The **last** area cannot be removed: a star with no spokes has nothing to draw. |
@@ -441,36 +447,50 @@ The day detail view includes pending items — it's a checklist, so it must show
 
 ## 8. Design system
 
-Restrained, typographic, hairline-ruled. System font stack — on Apple hardware that is SF, which suits the aesthetic and costs nothing to load.
+Flat, typographic, hairline-ruled — and quiet. Rows sit on white with rules between them rather than in a page of bordered cards; one ink carries the text and the primary controls, one accent carries the data. System font stack — on Apple hardware that is SF, which suits the aesthetic and costs nothing to load.
 
 ### Palette
 
 | Token | Value | Use |
 |---|---|---|
-| --bg | #f7f8fa | Page ground. Cool-biased, never neutral grey. |
-| --surface | #ffffff | Panels, cards. |
-| --text | #191c21 | — |
-| --text-secondary | #767e8a | — |
-| --text-tertiary | #adb4bd | Labels, empty states. |
-| --hairline | rgba(25,28,33,.09) | Nearly all borders. |
-| --accent | #3d6a8f | Structural only — the chart, progress, selection. |
-| --imp-high | #c8443a | Semantic priority colours, separate from the accent. |
-| --imp-medium | #cf8c22 | Priority reads as red / amber / green on the card stripe, |
-| --imp-low | #3a8f5c | the dot, the Today bar and the editor. |
-| --frozen | #b6bcc5 | A paused habit's stripe. |
-| --cell-done / --cell-missed | accent / rgba(200,68,58,.28) | The tracker grid's kept and missed cells. |
+| --bg / --surface | #ffffff | Page ground and rows. The app is white; separation comes from rules and washes. |
+| --sunken | #f5f6f8 | The one filled tone: soft panels, chips, buttons, pressed rows. |
+| --sunken-strong | #eceef1 | Its hover. |
+| --text | #0d1117 | Text, and every primary control — a filled button is ink, not colour. |
+| --text-secondary | #5b6472 | — |
+| --text-tertiary | #98a1ae | Labels, quiet meta. |
+| --hairline | rgba(13,17,23,.08) | Nearly every division in the app. |
+| --hairline-strong | rgba(13,17,23,.14) | An unticked check ring, the outer ring of the star. |
+| --accent | #3b5bdb | Data only — the star, the tracker grid, a ticked row. |
+| --imp-high | #e0483d | Semantic priority colours, separate from the accent. |
+| --imp-medium | #d5901c | Priority reads as red / amber / green on the tick's ring, |
+| --imp-low | #2f9159 | the meta dot and the composer's chip. |
+| --frozen | #b6bcc5 | A paused habit. |
+| --cell-done / --cell-missed | accent / rgba(224,72,61,.26) | The tracker grid's kept and missed cells. |
 
-The tracker grid is read as a **texture**, at a glance, so its kept cells are the accent and its missed ones a wash of the priority red — two saturated hues fighting at 12px reads as noise rather than as a pattern.
+The tracker grid is read as a **texture**, at a glance, so its kept cells are the accent and its missed ones a wash of the priority red — two saturated hues fighting at 13px reads as noise rather than as a pattern.
 
-Greys are all tinted slightly toward the accent so nothing reads as a stray warm neutral. Shadows carry the palette's hue rather than flat black. Radii step by depth: 16px containers, 12px default, 8px inner elements.
+Greys are all tinted slightly toward the accent so nothing reads as a stray warm neutral. Shadows are kept for things that genuinely float — the composer, a sheet, a toast; a flat surface gets a wash or a hairline instead. Radii step by depth: 20px containers, 14px default, 10px inner elements, and anything button-shaped is a pill.
+
+### Nothing needs explaining that a control already says
+
+The app's rule about its own text: **an affordance beats a sentence about the affordance.** In practice —
+
+- **No empty states.** Not on the day with nothing due, not on an empty to-do list, not on an area with no goals written. "Add habit" and "Add to-do" are on those screens either way, and they say the same thing in two words.
+- **No prose under a control** explaining what the control just did, what a to-do is, or what pausing means. What is left is a handful of hints inside pickers that state a real constraint (a monthly day is 1–28), and the one place with no affordance to point at: iOS has no install button, so **Add to home screen** spells out the two taps that do work (§9).
+- **Icons where an icon is unambiguous**: the tab bar is three glyphs with no captions, Edit is a pencil, Back is an arrow. Each carries a real `aria-label`, because "unambiguous" is about the eye and a screen reader has neither.
+- **The screen says what it is once**, in its title, and nothing repeats it.
 
 ### Non-negotiables
 
-- **Paused habits show a neutral grey stripe**, not their priority colour — advertising urgency for something excluded from scoring is a lie.
+- **No pinch- or double-tap zoom.** `user-scalable=no` plus `maximum-scale=1` in the viewport meta, `touch-action: manipulation` and `text-size-adjust: 100%` in CSS. This is installed to a home screen and has to behave like an app, not a page; the page is designed at one scale and every control is thumb-sized already. The page does not rubber-band either (`overscroll-behavior-y: none`).
+- **Priority lives on the tick**, as the colour of its ring — not on a stripe down the edge of the row and not on a dot beside the title. It belongs on the thing you tap. Crossing out sits at the *far* end of the row: two rings side by side made every row ask its question twice.
+- **Paused habits show a neutral grey**, not their priority colour — advertising urgency for something excluded from scoring is a lie.
 - **A streak is shown from the second one.** One kept day is not a run of anything, and a flame beside a zero congratulates you on nothing.
 - **Tabular figures** on every number that sits in a column with another number.
-- **A visible focus ring** on everything interactive, and real `aria-label`s on icon-only buttons. The chart needs a text description; it is the main data display.
+- **A visible focus ring** on everything interactive, and real `aria-label`s on icon-only buttons — of which there are now many. The chart needs a text description; it is the main data display.
 - **No browser dialogs.** Confirmation happens inline.
+- **The header is sticky**, and a back arrow lives *inside* it rather than above it: an arrow that scrolls away while the title stays put reads as a web page.
 - `100dvh`, never `100vh` — mobile Safari's toolbar makes the difference visible.
 - Respect `prefers-reduced-motion`.
 
@@ -638,6 +658,8 @@ Each of these cost real debugging the first time — plus three known ones added
 | **A 30-day scoring window** | Silently re-weights tasks as the calendar shifts. Use 28. |
 | **Fixed monthly days above 28** | The task vanishes in short months with no error. Clamp on write *and* on read. |
 | **An SVG `apple-touch-icon`** | iOS ignores it entirely and shows a screenshot instead. It must be PNG. |
+| **A zoomable viewport on an installed app** | A double-tap near a tick zooms the page instead of ticking, and the layout is left at a scale nothing else in the app expects. Lock the scale in the viewport meta *and* set `touch-action: manipulation` — the meta alone still leaves the double-tap gesture on some builds. |
+| **Composer text under 16px** | iOS zooms the page the instant the field takes focus, and never zooms back. Every input the composer opens with is 16px or more. |
 | **Deleting a task on edit** | Orphans its check-ins and rewrites history. Archive instead. |
 | **Deleting a goal's tasks with it** | A goal owns no tasks (§1); removing an aim must not touch a habit. |
 | **Deleting an area's habits with it** | Their check-ins describe real days. Archive them, exactly as for a single habit, and tombstone only the area and its goals. |

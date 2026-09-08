@@ -24,9 +24,8 @@ import {
 import { setTaskPaused } from '../db/repo'
 import { useSnapshot } from './DataContext'
 import { DayGrid } from './charts'
-import { Percent, Flame, TopBar, TopBarBack, formatDate } from './bits'
+import { Percent, Flame, Pencil, TopBar, formatDate } from './bits'
 import { TaskComposer, fromTask } from './TaskComposer'
-import { back } from './router'
 
 export function TaskScreen({ taskId }: { taskId: number }) {
   const { snapshot, index, today } = useSnapshot()
@@ -37,9 +36,6 @@ export function TaskScreen({ taskId }: { taskId: number }) {
     return (
       <div className="screen">
         <TopBar title="Task" backTo="/" />
-        <div className="card">
-          <p className="empty">That task is archived, or no longer exists.</p>
-        </div>
       </div>
     )
   }
@@ -53,8 +49,7 @@ export function TaskScreen({ taskId }: { taskId: number }) {
   if (editing) {
     return (
       <div className="screen">
-        <TopBarBack to={`/tasks/${taskId}`} />
-        <TopBar title={habit ? 'Edit habit' : 'Edit to-do'} />
+        <TopBar title={habit ? 'Edit habit' : 'Edit to-do'} backTo={`/tasks/${taskId}`} />
         <TaskComposer
           taskId={taskId}
           initial={fromTask(task)}
@@ -73,15 +68,20 @@ export function TaskScreen({ taskId }: { taskId: number }) {
         sub={area?.name}
         backTo="/"
         right={
-          <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
-            Edit
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Edit"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil />
           </button>
         }
       />
 
       {habit ? (
         <>
-          <div className="card card-pad">
+          <div className="card-pad">
             <div className="stat-row">
               <Stat
                 label="Kept"
@@ -112,8 +112,7 @@ export function TaskScreen({ taskId }: { taskId: number }) {
             </p>
           </div>
 
-          <p className="section-label">Last 15 weeks</p>
-          <div className="card card-pad">
+          <div className="card-pad">
             <DayGrid view={buildHabitGrid(snapshot, taskId, today)} />
           </div>
 
@@ -123,14 +122,9 @@ export function TaskScreen({ taskId }: { taskId: number }) {
               className="btn"
               onClick={() => void setTaskPaused(taskId, !paused, today)}
             >
-              {paused ? 'Resume habit' : 'Pause habit'}
+              {paused ? 'Resume' : 'Pause'}
             </button>
           </div>
-          <p className="empty" style={{ textAlign: 'left', padding: '10px 2px 0' }}>
-            {paused
-              ? 'Paused days are outside scoring — neither kept nor missed. Resuming makes today live again.'
-              : 'Pausing stops the misses accruing while you are away, without rewriting what came before.'}
-          </p>
 
           {periods.length > 0 ? (
             <>
@@ -148,7 +142,7 @@ export function TaskScreen({ taskId }: { taskId: number }) {
                         </div>
                         <div className="row-meta">
                           {p.end_date
-                            ? `${p.end_date} is live again — the end date is exclusive`
+                            ? 'ended'
                             : isFrozenOn(today, [p])
                               ? 'still paused'
                               : 'scheduled'}
@@ -160,21 +154,13 @@ export function TaskScreen({ taskId }: { taskId: number }) {
             </>
           ) : null}
         </>
-      ) : (
-        <div className="card card-pad">
-          <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)' }}>
-            A to-do happens once, so there is no cadence to track and nothing here counts towards{' '}
-            {area?.name ?? 'the area'}&rsquo;s score.
-            {task.due_date ? ` Due ${formatDate(task.due_date)}.` : ' No deadline set.'}
-          </p>
+      ) : task.due_date ? (
+        <div className="card-pad">
+          <div className="stat-row">
+            <Stat label="Due" value={<span className="num">{formatDate(task.due_date)}</span>} />
+          </div>
         </div>
-      )}
-
-      <p style={{ marginTop: 20, fontSize: 13 }}>
-        <button type="button" className="linkish" onClick={() => back('/')}>
-          ← Back
-        </button>
-      </p>
+      ) : null}
     </div>
   )
 }

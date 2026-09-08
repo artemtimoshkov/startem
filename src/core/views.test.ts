@@ -289,6 +289,27 @@ describe('the star', () => {
     expect(money.radiusRatio).toBe(0.5)
   })
 
+  it('averages the scored areas into the middle of the chart, ignoring the unscored', () => {
+    const s = twoAreas()
+    s.checkins = [
+      checkin({ subgoal_id: 1, date: '2026-08-05', status: 'done' }),
+      checkin({ subgoal_id: 1, date: '2026-08-12', status: 'done' }),
+      checkin({ subgoal_id: 1, date: '2026-08-19', status: 'done' }),
+    ]
+    const view = buildStar(s, TODAY)
+    // Health 10, Work 1, Money null — the mean is of the two, not of three.
+    expect(view.vertices.map((v) => v.score)).toEqual([10, 1, null])
+    expect(view.mean).toBe(5.5)
+    expect(view.meanLabel).toBe('5.5')
+  })
+
+  it('has no middle number when nothing is scored at all', () => {
+    const bare = snapshot({ areas: AREAS(), goals: [] })
+    const view = buildStar(bare, TODAY)
+    expect(view.mean).toBeNull()
+    expect(view.meanLabel).toBe('—')
+  })
+
   it('scores an area whose only habit is paused as null, not zero', () => {
     const s = twoAreas()
     s.freezes = [freeze({ subgoal_id: 2, start_date: '2026-01-01', end_date: null })]

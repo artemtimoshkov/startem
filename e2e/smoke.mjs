@@ -159,17 +159,30 @@ await step('crossing out shrinks the target', async () => {
   await page.waitForTimeout(300)
 })
 
-await step('three tabs, and the removed screens are gone as routes too', async () => {
+await step('three tabs, unlabelled, and the removed screens are gone as routes too', async () => {
   const tabs = await page.$$eval('.tab', (els) => els.map((el) => el.getAttribute('href')))
   if (JSON.stringify(tabs) !== JSON.stringify(['/', '/todos', '/star'])) {
     throw new Error(`tabs: ${tabs.join(', ')}`)
   }
+  // Icons carry the tabs now, so each one has to say what it is to a reader.
+  const labels = await page.$$eval('.tab', (els) => els.map((el) => el.getAttribute('aria-label')))
+  if (labels.some((l) => !l)) throw new Error(`an icon-only tab has no label: ${labels}`)
+  // No captions — the overdue badge is the only text the bar is allowed.
+  const caption = (await page.textContent('.tabbar')).replace(/\d/g, '').trim()
+  if (caption !== '') throw new Error(`the tabs still carry text: "${caption}"`)
+  // An unrecognised route lands on the day's list rather than a dead end.
   for (const gone of ['/calendar', '/settings', '/goals/41', '/goals/new']) {
     await page.goto(`${BASE}${gone}`, { waitUntil: 'networkidle' })
-    const body = await page.textContent('.screen')
-    if (!body.includes('Nothing here')) throw new Error(`${gone} still renders a screen`)
+    const h = await page.textContent('h1')
+    if (h.trim() !== 'Today') throw new Error(`${gone} rendered "${h}"`)
   }
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+})
+
+await step('the page cannot be pinched or double-tapped to zoom', async () => {
+  const vp = await page.getAttribute('meta[name="viewport"]', 'content')
+  if (!/user-scalable=no/.test(vp)) throw new Error(`viewport: ${vp}`)
+  if (!/maximum-scale=1/.test(vp)) throw new Error(`viewport: ${vp}`)
 })
 
 // ---------------------------------------------------------------------------
@@ -237,8 +250,8 @@ await step('adding from the day screen writes a habit, not a to-do', async () =>
 
 await step('the switch turns one into the other, and only touches the repeat', async () => {
   await page.click('.row-open:has-text("Morning walk")')
-  await page.waitForSelector('text=Pause habit')
-  await page.click('.btn:has-text("Edit")')
+  await page.waitForSelector('.btn:has-text("Pause")')
+  await page.click('button[aria-label="Edit"]')
   await page.waitForSelector('.composer-input')
   await page.click('.kindswitch-btn:has-text("To-do")')
   await page.click('.composer-submit')
@@ -378,12 +391,19 @@ await step('star renders with scores and one em dash', async () => {
   const desc = await page.getAttribute('.star-svg', 'aria-label')
   if (!desc.includes('Health')) throw new Error(`aria-label: ${desc}`)
   if (!desc.includes('—')) throw new Error('no null score rendered as em dash')
+  // The chart is the screen: the areas are not repeated as a list under it.
+  if (await page.$('.list-link')) throw new Error('the areas are still listed under the star')
+  const body = await page.textContent('.screen')
+  if (/last 28 days/i.test(body)) throw new Error('the star still captions its window')
+  // The middle of the ring resolves the whole chart to one number.
+  const mean = await page.textContent('.star-mean')
+  if (!/^(\d+\.\d|—)$/.test(mean.trim())) throw new Error(`middle reads "${mean}"`)
   console.log('      ' + desc.slice(0, 150))
 })
 
 await step('adding an area adds a spoke, and the chart redraws around it', async () => {
   const before = (await page.$$('.star-vertex')).length
-  await page.click('.topbar button:has-text("Edit")')
+  await page.click('.topbar button[aria-label="Edit areas"]')
   await page.waitForSelector('.area-add')
   await page.fill('.area-add input', 'Learning')
   await page.click('.area-add button:has-text("Add")')
@@ -422,7 +442,7 @@ await step('removing an area archives its habits rather than deleting them', asy
   const question = await page.textContent('.confirm p')
   if (!question.includes('archived')) throw new Error(`confirmation says: ${question}`)
   if (!question.includes('habit')) throw new Error('the confirmation did not count the habits')
-  await page.click('.confirm button:has-text("Remove it")')
+  await page.click('.confirm button:has-text("Remove")')
   await page.waitForTimeout(700)
 
   const after = (await page.$$('.star-vertex')).length
@@ -440,14 +460,14 @@ await step('removing an area archives its habits rather than deleting them', asy
   if (JSON.stringify(live) !== JSON.stringify(live.map((_, i) => i))) {
     throw new Error(`positions did not compact: ${live}`)
   }
-  await page.click('.topbar button:has-text("Done")')
+  await page.click('.topbar button[aria-label="Done editing areas"]')
 })
 
 await step('clicking a vertex opens the area, aims first', async () => {
   await page.click('.star-vertex')
   await page.waitForSelector('.backlink')
   const labels = await page.$$eval('.section-label', (n) => n.map((x) => x.textContent.trim()))
-  if (labels[0] !== 'What are you aiming for?') throw new Error(`first section: ${labels[0]}`)
+  if (labels[0] !== 'Goals') throw new Error(`first section: ${labels[0]}`)
   if (!labels.some((l) => l.startsWith('Habits'))) throw new Error(`sections: ${labels}`)
 })
 
@@ -482,9 +502,9 @@ await step('removing a goal leaves every habit in the area alone', async () => {
   const before = (await page.$$('.row-button')).length
   await page.click('.goal-row:has-text("Touch my toes") .goal-title')
   await page.waitForSelector('.goal-body')
-  await page.click('.goal-body button:has-text("Remove goal")')
+  await page.click('.goal-body button:has-text("Remove")')
   await page.waitForSelector('.confirm')
-  await page.click('.confirm button:has-text("Remove it")')
+  await page.click('.confirm button:has-text("Remove")')
   await page.waitForTimeout(600)
   const { goals, subgoals } = await readStores(['goals', 'subgoals'])
   const stored = goals.find((g) => g.title === 'Touch my toes')
@@ -513,13 +533,13 @@ await step('the tracker grid hangs off the habit, not off a goal', async () => {
 })
 
 await step('pausing a habit takes it out of the day, and resuming brings it back', async () => {
-  await page.click('.btn:has-text("Pause habit")')
-  await page.waitForSelector('.btn:has-text("Resume habit")', { timeout: 5000 })
+  await page.click('.btn:has-text("Pause")')
+  await page.waitForSelector('.btn:has-text("Resume")', { timeout: 5000 })
   const { freezes } = await readStores(['freezes'])
   const open = freezes.filter((f) => f.subgoal_id === 101 && !f.deleted && f.end_date == null)
   if (open.length !== 1) throw new Error(`${open.length} open periods`)
-  await page.click('.btn:has-text("Resume habit")')
-  await page.waitForSelector('.btn:has-text("Pause habit")', { timeout: 5000 })
+  await page.click('.btn:has-text("Resume")')
+  await page.waitForSelector('.btn:has-text("Pause")', { timeout: 5000 })
 })
 
 await step('a to-do gets the editor and no tracker at all', async () => {
@@ -527,15 +547,18 @@ await step('a to-do gets the editor and no tracker at all', async () => {
   await page.waitForSelector('h1')
   if (await page.$('.daygrid')) throw new Error('a to-do was given a tracker grid')
   const body = await page.textContent('.screen')
-  if (!body.includes('happens once')) throw new Error('no explanation of what a to-do is')
+  if (body.includes('Streak')) throw new Error('a to-do was given habit stats')
+  // Nothing on screen explains what a to-do is: the absence of a tracker is
+  // the explanation.
+  if (/happens once/.test(body)) throw new Error('the to-do screen still explains itself')
 })
 
 await step('archiving a task keeps the row and its check-ins', async () => {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
   await page.click('.row-open:has-text("Protein target")')
-  await page.click('.btn:has-text("Edit")')
-  await page.waitForSelector('text=Archive this task')
-  await page.click('text=Archive this task')
+  await page.click('button[aria-label="Edit"]')
+  await page.waitForSelector('.composer-foot button:has-text("Archive")')
+  await page.click('.composer-foot button:has-text("Archive")')
   await page.waitForTimeout(700)
   const { subgoals } = await readStores(['subgoals'])
   const stored = subgoals.find((s) => s.id === 102)
