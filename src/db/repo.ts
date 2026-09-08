@@ -10,6 +10,8 @@
 
 import {
   DEFAULT_AREAS,
+  MAX_AREAS,
+  MIN_AREAS,
   type Area,
   type CheckinStatus,
   type ClockTime,
@@ -114,10 +116,10 @@ export async function toggleSkipped(
 /**
  * What the goal editor hands back.
  *
- * A goal is a heading: an area, a title and some prose. It carries no
- * importance and owns no task list — tasks are created from the task
- * composer and point *at* a goal, which is what lets one exist without a
- * goal at all (§3, §7).
+ * A goal is an aim: an area, a title and some prose. It carries no importance,
+ * owns no tasks and never appears in a score — habits hang off the area
+ * directly (§3, §5). Editing one is therefore only ever these three fields
+ * plus, separately, whether it has been reached.
  */
 export interface GoalDraft {
   id?: number
@@ -132,12 +134,22 @@ export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<nu
     const now = stamp()
     const existing = draft.id == null ? undefined : await db.goals.get(draft.id)
     const goalId = draft.id ?? (await newId())
+    // A new goal goes to the end of its area's list rather than the top: the
+    // aims already written down are the ones being worked on.
+    const position =
+      existing?.position ??
+      (await db.goals.where('area_id').equals(draft.area_id).toArray()).reduce(
+        (max, g) => (g.deleted ? max : Math.max(max, g.position + 1)),
+        0,
+      )
     await db.goals.put({
       id: goalId,
       area_id: draft.area_id,
       title: draft.title.trim(),
       description: draft.description.trim(),
       status: existing?.status ?? 'active',
+      position,
+      achieved_on: existing?.achieved_on ?? null,
       created_at: existing?.created_at ?? today,
       updated_at: now,
       deleted: false,
@@ -146,16 +158,60 @@ export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<nu
   })
 }
 
-/**
- * The one-line create behind "Create new goal" in the task composer's area
- * picker — the same write as the editor, minus the prose.
- */
+/** The one-line create behind the area screen's "What are you aiming for?". */
 export async function createGoal(
   area_id: number,
   title: string,
   today = todayISO(),
 ): Promise<number> {
   return saveGoal({ area_id, title, description: '' }, today)
+}
+
+/**
+ * Marks a goal reached, or puts it back in play.
+ *
+ * `achieved_on` is the day it happened, and it is cleared on the way back out
+ * — a goal reopened in October must not still claim it was reached in March.
+ */
+export async function setGoalStatus(
+  goalId: number,
+  status: GoalStatus,
+  today = todayISO(),
+): Promise<void> {
+  const goal = await db.goals.get(goalId)
+  if (!goal) return
+  await db.goals.put({
+    ...goal,
+    status,
+    achieved_on: status === 'achieved' ? today : null,
+    updated_at: stamp(),
+  })
+}
+
+/**
+ * Removes a goal — as a tombstone, so the removal can propagate at §10 rather
+ * than a device that missed it quietly resurrecting the goal on the next pull.
+ *
+ * Nothing else moves. A goal owns no tasks now (§3): deleting "bench 100 kg"
+ * has no more effect on the gym habit than crossing a line out of a notebook.
+ */
+export async function deleteGoal(goalId: number): Promise<void> {
+  const goal = await db.goals.get(goalId)
+  if (!goal) return
+  await db.goals.put({ ...goal, deleted: true, updated_at: stamp() })
+}
+
+/** Reorders one area's goals to exactly the ids given, in that order. */
+export async function reorderGoals(areaId: number, orderedIds: number[]): Promise<void> {
+  await db.transaction('rw', db.goals, async () => {
+    const now = stamp()
+    for (const [position, id] of orderedIds.entries()) {
+      const goal = await db.goals.get(id)
+      if (!goal || goal.area_id !== areaId) continue
+      if (goal.position === position) continue
+      await db.goals.put({ ...goal, position, updated_at: now })
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +222,6 @@ export async function createGoal(
 export interface TaskDraft {
   id?: number
   area_id: number
-  goal_id: number | null
   title: string
   importance: Importance
   cadence_type: Subgoal['cadence_type']
@@ -198,7 +253,6 @@ export async function saveTask(draft: TaskDraft, today = todayISO()): Promise<nu
       {
         ...draft,
         id,
-        goal_id: draft.goal_id ?? null,
         archived: existing?.archived ?? false,
         created_at: existing?.created_at ?? today,
       },
@@ -222,119 +276,194 @@ export async function archiveTask(taskId: number, archived = true): Promise<void
   await db.subgoals.put({ ...task, archived, updated_at: stamp() })
 }
 
-/** Moves a task to another area, and to a goal inside it or to no goal at all. */
-export async function moveTask(
-  taskId: number,
-  area_id: number,
-  goal_id: number | null,
-): Promise<void> {
+/** Moves a task to another area. That is the only place a task can live (§3). */
+export async function moveTask(taskId: number, area_id: number): Promise<void> {
   const task = await db.subgoals.get(taskId)
   if (!task) return
-  await db.subgoals.put({ ...task, area_id, goal_id, updated_at: stamp() })
+  await db.subgoals.put({ ...task, area_id, updated_at: stamp() })
 }
 
 /**
- * Removes a goal — as a tombstone, so the removal can propagate at §10 rather
- * than a device that missed it quietly resurrecting the goal on the next pull.
+ * Pauses one habit: opens a period, starting today.
  *
- * Its tasks are **detached, not destroyed**: they fall back to the area they
- * were already scoring against and keep every check-in. A goal is a heading
- * now (§3), and deleting a heading must not delete the work under it — the
- * way to retire a task is to archive that task.
+ * The period is what matters, not a flag. A flag would say the habit is paused
+ * *now* but not that it was paused last March, and unpausing would back-fill
+ * every dormant day with a miss (§3). Paused days are outside scoring
+ * entirely — they are neither kept nor missed.
  */
-export async function deleteGoal(goalId: number): Promise<void> {
-  await db.transaction('rw', db.goals, db.subgoals, db.freezes, async () => {
-    const now = stamp()
-    const goal = await db.goals.get(goalId)
-    if (goal) await db.goals.put({ ...goal, deleted: true, updated_at: now })
-
-    const tasks = await db.subgoals.where('goal_id').equals(goalId).toArray()
-    for (const task of tasks) {
-      await db.subgoals.put({
-        ...task,
-        goal_id: null,
-        area_id: task.area_id || goal?.area_id || 0,
-        updated_at: now,
-      })
-    }
-
-    const periods = await db.freezes.where('goal_id').equals(goalId).toArray()
-    for (const period of periods) {
-      await db.freezes.put({ ...period, deleted: true, updated_at: now })
-    }
-  })
-}
-
-/**
- * Opens a freeze period and flips `status`.
- *
- * The period is what matters: `goals.status` alone would say the goal is
- * frozen *now* but not that it was frozen last March, and unfreezing would
- * back-fill the dormant weeks with misses (§3).
- */
-export async function freezeGoal(goalId: number, today = todayISO()): Promise<void> {
-  await db.transaction('rw', db.goals, db.freezes, db.meta, async () => {
-    const now = stamp()
-    const goal = await db.goals.get(goalId)
-    if (!goal) return
-    const open = (await db.freezes.where('goal_id').equals(goalId).toArray()).find(
+export async function pauseTask(taskId: number, today = todayISO()): Promise<void> {
+  await db.transaction('rw', db.freezes, db.meta, async () => {
+    const open = (await db.freezes.where('subgoal_id').equals(taskId).toArray()).find(
       (f) => !f.deleted && f.end_date == null,
     )
-    if (!open) {
-      await db.freezes.add({
-        id: await newId(),
-        goal_id: goalId,
-        start_date: today,
-        end_date: null,
-        updated_at: now,
-        deleted: false,
-      })
-    }
-    await db.goals.put({ ...goal, status: 'frozen', updated_at: now })
+    if (open) return
+    await db.freezes.add({
+      id: await newId(),
+      subgoal_id: taskId,
+      start_date: today,
+      end_date: null,
+      updated_at: stamp(),
+      deleted: false,
+    })
   })
 }
 
 /** Closes the open period. `end_date` is exclusive, so today is live again. */
-export async function unfreezeGoal(goalId: number, today = todayISO()): Promise<void> {
-  await db.transaction('rw', db.goals, db.freezes, db.meta, async () => {
+export async function resumeTask(taskId: number, today = todayISO()): Promise<void> {
+  await db.transaction('rw', db.freezes, async () => {
     const now = stamp()
-    const goal = await db.goals.get(goalId)
-    if (!goal) return
-    const periods = await db.freezes.where('goal_id').equals(goalId).toArray()
-    for (const period of periods) {
+    for (const period of await db.freezes.where('subgoal_id').equals(taskId).toArray()) {
       if (period.deleted || period.end_date != null) continue
-      // Exclusive end: unfreezing makes today itself live again.
+      // Exclusive end: resuming makes today itself live again.
       const end = period.start_date > today ? period.start_date : today
       if (end === period.start_date) {
-        // Frozen and unfrozen on the same day: the period covers no days at
+        // Paused and resumed on the same day: the period covers no days at
         // all, so it is noise in the history rather than a record of anything.
         await db.freezes.put({ ...period, end_date: end, deleted: true, updated_at: now })
       } else {
         await db.freezes.put({ ...period, end_date: end, updated_at: now })
       }
     }
-    await db.goals.put({ ...goal, status: 'active', updated_at: now })
   })
 }
 
-export async function setGoalStatus(goalId: number, status: GoalStatus): Promise<void> {
-  if (status === 'frozen') await freezeGoal(goalId)
-  else await unfreezeGoal(goalId)
+/** `paused` is what the habit screen's one switch writes. */
+export async function setTaskPaused(
+  taskId: number,
+  paused: boolean,
+  today = todayISO(),
+): Promise<void> {
+  if (paused) await pauseTask(taskId, today)
+  else await resumeTask(taskId, today)
 }
 
 // ---------------------------------------------------------------------------
-// Areas (§7 — name only; areas are not created or destroyed by the user)
+// Areas (§7) — the user's, from the first run onwards
 // ---------------------------------------------------------------------------
 
-/**
- * **No surface as of v2.6** — the settings screen was the only one, and it
- * went with the JSON import/export. The rule stays here, and tested, for
- * whatever brings renaming back: a blank name is refused rather than stored.
- */
+/** Thrown when a write would leave the star with no spokes, or too many. */
+export class AreaLimitError extends Error {}
+
+/** Live areas, in chart order. */
+async function liveAreas(): Promise<Area[]> {
+  return (await db.areas.toArray())
+    .filter((a) => !a.deleted)
+    .sort((a, b) => a.position - b.position || a.id - b.id)
+}
+
+/** A blank name is refused rather than stored — an unlabelled spoke is noise. */
 export async function renameArea(areaId: number, name: string): Promise<void> {
   const area = await db.areas.get(areaId)
   if (!area) return
   await db.areas.put({ ...area, name: name.trim() || area.name, updated_at: stamp() })
+}
+
+/**
+ * Adds a spoke to the star, at the end of the ring.
+ *
+ * The chart's geometry is `360 / count`, so this is genuinely all there is to
+ * it — nothing downstream assumes ten (§6).
+ */
+export async function addArea(name: string): Promise<number> {
+  const clean = name.trim()
+  if (!clean) throw new AreaLimitError('An area needs a name.')
+  return db.transaction('rw', db.areas, db.meta, async () => {
+    const areas = await liveAreas()
+    if (areas.length >= MAX_AREAS) {
+      throw new AreaLimitError(`The star holds ${MAX_AREAS} areas at most.`)
+    }
+    const id = await newId()
+    await db.areas.put({
+      id,
+      name: clean,
+      position: areas.length === 0 ? 0 : areas[areas.length - 1]!.position + 1,
+      updated_at: stamp(),
+      deleted: false,
+    })
+    return id
+  })
+}
+
+/** What deleting an area would take with it, so the confirmation can say so. */
+export interface AreaContents {
+  habits: number
+  todos: number
+  goals: number
+}
+
+export async function areaContents(areaId: number): Promise<AreaContents> {
+  const [tasks, goals] = await Promise.all([
+    db.subgoals.where('area_id').equals(areaId).toArray(),
+    db.goals.where('area_id').equals(areaId).toArray(),
+  ])
+  const live = tasks.filter((t) => !t.deleted && !t.archived)
+  return {
+    habits: live.filter((t) => t.cadence_type !== 'once').length,
+    todos: live.filter((t) => t.cadence_type === 'once').length,
+    goals: goals.filter((g) => !g.deleted).length,
+  }
+}
+
+/**
+ * Removes an area, and with it the spoke on the star.
+ *
+ * The area is tombstoned so the removal propagates (§10). Its tasks are
+ * **archived, not deleted** — their check-ins still describe real days, and
+ * this is the same rule that governs retiring a single task (§3). Its goals
+ * are tombstoned, because an aim with nowhere to live is just a stray row.
+ *
+ * The last area cannot go: a star with no spokes has nothing to draw, and an
+ * app whose only screen is empty has no way back.
+ */
+export async function deleteArea(areaId: number): Promise<void> {
+  await db.transaction('rw', db.areas, db.goals, db.subgoals, async () => {
+    const areas = await liveAreas()
+    if (areas.length <= MIN_AREAS) {
+      throw new AreaLimitError('The last area cannot be removed.')
+    }
+    const area = await db.areas.get(areaId)
+    if (!area || area.deleted) return
+    const now = stamp()
+
+    await db.areas.put({ ...area, deleted: true, updated_at: now })
+    for (const task of await db.subgoals.where('area_id').equals(areaId).toArray()) {
+      if (task.archived) continue
+      await db.subgoals.put({ ...task, archived: true, updated_at: now })
+    }
+    for (const goal of await db.goals.where('area_id').equals(areaId).toArray()) {
+      if (goal.deleted) continue
+      await db.goals.put({ ...goal, deleted: true, updated_at: now })
+    }
+
+    // Positions are compacted so the ring has no gap in it, and so a later
+    // insert cannot land on a position two areas already share.
+    let position = 0
+    for (const other of areas) {
+      if (other.id === areaId) continue
+      if (other.position !== position) {
+        await db.areas.put({ ...other, position, updated_at: now })
+      }
+      position++
+    }
+  })
+}
+
+/** Moves one area `by` places around the ring. Clamped at both ends. */
+export async function moveArea(areaId: number, by: number): Promise<void> {
+  await db.transaction('rw', db.areas, async () => {
+    const areas = await liveAreas()
+    const from = areas.findIndex((a) => a.id === areaId)
+    if (from < 0) return
+    const to = Math.min(areas.length - 1, Math.max(0, from + by))
+    if (to === from) return
+    const reordered = areas.slice()
+    reordered.splice(to, 0, reordered.splice(from, 1)[0]!)
+    const now = stamp()
+    for (const [position, area] of reordered.entries()) {
+      if (area.position === position) continue
+      await db.areas.put({ ...area, position, updated_at: now })
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------

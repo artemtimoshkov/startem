@@ -3,9 +3,9 @@
  *
  * Everything here is about the real browser: that IndexedDB really keeps the
  * ids the sample loader brought in, that a tick really moves the star, that
- * removing an action really archives rather than deletes, that a deep link
- * really survives a refresh. Milestone 3 needs a browser anyway to prove the
- * service worker opens with no network, so this is where that will go too.
+ * removing an area really archives rather than deletes, that a deep link
+ * really survives a refresh, and that a device holding the *old* three-tier
+ * store really upgrades in place without dropping a pause on the floor.
  *
  *   npm run build:e2e && npm run e2e
  *
@@ -37,96 +37,93 @@ const step = async (name, fn) => {
   catch (e) { console.log(`FAIL  ${name}: ${e.message}`); errors.push(`${name}: ${e.message}`) }
 }
 
+/** Reads whole object stores out of the live IndexedDB, in the page. */
+const readStores = (stores) =>
+  page.evaluate(async (names) => {
+    const req = indexedDB.open('startem')
+    const db = await new Promise((res, rej) => {
+      req.onsuccess = () => res(req.result)
+      req.onerror = () => rej(req.error)
+    })
+    const tx = db.transaction(names, 'readonly')
+    const out = {}
+    await Promise.all(
+      names.map(
+        (n) =>
+          new Promise((res) => {
+            const r = tx.objectStore(n).getAll()
+            r.onsuccess = () => { out[n] = r.result; res() }
+          }),
+      ),
+    )
+    return out
+  }, stores)
+
 await page.goto(BASE, { waitUntil: 'networkidle' })
 
-await step('tasks screen renders with default areas', async () => {
+await step('the day screen renders, and it is the habit screen', async () => {
   await page.waitForSelector('h1', { timeout: 8000 })
   const h = await page.textContent('h1')
-  if (h.trim() !== 'Tasks') throw new Error(`h1 was "${h}"`)
-  if (!(await page.$('.add-task'))) throw new Error('no Add task button')
+  if (h.trim() !== 'Today') throw new Error(`h1 was "${h}"`)
+  if (!(await page.$('.add-task'))) throw new Error('no Add habit button')
+  if (!(await page.textContent('.add-task')).includes('habit')) {
+    throw new Error('the day screen does not offer to add a habit')
+  }
 })
 
 await step('the sample dataset seeds an empty store', async () => {
-  // A seeded preview build, not an import screen — see the header note.
   await page.waitForSelector('.row-title', { timeout: 8000 })
 })
 
 await step('ids preserved through the load', async () => {
-  const ids = await page.evaluate(async () => {
-    const req = indexedDB.open('startem')
-    const db = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error) })
-    const tx = db.transaction(['goals','subgoals'], 'readonly')
-    const get = (store) => new Promise((res) => { const r = tx.objectStore(store).getAll(); r.onsuccess = () => res(r.result) })
-    const [goals, subgoals] = await Promise.all([get('goals'), get('subgoals')])
-    return { goals: goals.map(g => g.id).sort((a,b)=>a-b), subgoals: subgoals.map(s => s.id).sort((a,b)=>a-b) }
-  })
-  const expectG = [41,42,43,44,45], expectS = [101,102,103,104,105,106,107,108,109,110,111,112]
-  if (JSON.stringify(ids.goals) !== JSON.stringify(expectG)) throw new Error(`goal ids ${JSON.stringify(ids.goals)}`)
-  if (JSON.stringify(ids.subgoals) !== JSON.stringify(expectS)) throw new Error(`subgoal ids ${JSON.stringify(ids.subgoals)}`)
+  const { goals, subgoals } = await readStores(['goals', 'subgoals'])
+  const g = goals.map((x) => x.id).sort((a, b) => a - b)
+  const s = subgoals.map((x) => x.id).sort((a, b) => a - b)
+  const expectG = [41, 42, 43, 44, 45, 46]
+  const expectS = [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114]
+  if (JSON.stringify(g) !== JSON.stringify(expectG)) throw new Error(`goal ids ${JSON.stringify(g)}`)
+  if (JSON.stringify(s) !== JSON.stringify(expectS)) throw new Error(`subgoal ids ${JSON.stringify(s)}`)
 })
 
 await step('monthly_day 31 was clamped to 28 on the way in', async () => {
-  const day = await page.evaluate(async () => {
-    const req = indexedDB.open('startem')
-    const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
-    const tx = db.transaction('subgoals', 'readonly')
-    const r = tx.objectStore('subgoals').get(106)
-    return await new Promise((res) => { r.onsuccess = () => res(r.result.monthly_day) })
-  })
+  const { subgoals } = await readStores(['subgoals'])
+  const day = subgoals.find((s) => s.id === 106).monthly_day
   if (day !== 28) throw new Error(`monthly_day was ${day}`)
 })
 
-await step('the loader moves goal importance down onto the tasks', async () => {
-  const rows = await page.evaluate(async () => {
-    const req = indexedDB.open('startem')
-    const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
-    const tx = db.transaction(['goals','subgoals'], 'readonly')
-    const get = (store) => new Promise((res) => { const r = tx.objectStore(store).getAll(); r.onsuccess = () => res(r.result) })
-    const [goals, subgoals] = await Promise.all([get('goals'), get('subgoals')])
-    return { goals, subgoals }
-  })
-  // Goal 41 was `high` in the export; its tasks inherit that, and the goal
-  // itself no longer carries a priority at all (§3).
-  const goal = rows.goals.find((g) => g.id === 41)
-  if (goal.importance !== undefined) throw new Error('goal still carries importance')
-  const gym = rows.subgoals.find((s) => s.id === 101)
-  if (gym.importance !== 'high') throw new Error(`task importance ${gym.importance}`)
-  if (gym.area_id !== 1) throw new Error(`task area_id ${gym.area_id}`)
-  if (gym.interval !== 1) throw new Error(`task interval ${gym.interval}`)
-  // A task written in the new shape: an area, no goal, its own priority.
-  const spend = rows.subgoals.find((s) => s.id === 111)
-  if (spend.goal_id != null) throw new Error(`goal-less task got goal_id ${spend.goal_id}`)
-  if (spend.area_id !== 8) throw new Error(`goal-less task area_id ${spend.area_id}`)
-  const guitar = rows.subgoals.find((s) => s.id === 112)
-  if (guitar.interval !== 2) throw new Error(`custom interval ${guitar.interval}`)
-  if (guitar.start_date !== '2026-08-12') throw new Error(`start ${guitar.start_date}`)
-})
-
-await step('tasks list shows the sample tasks, heaviest first', async () => {
-  await page.click('.tab[href="/"]')
-  await page.waitForSelector('.row-title')
-  const titles = await page.$$eval('.row-title', (n) => n.map((x) => x.textContent.trim()))
-  if (titles.length === 0) throw new Error('no rows')
-  // Heaviest first, but grouping wins: the DOM is descending *within* each
-  // area group, and the groups appear in the order the global sort first
-  // reaches them. So the flat list is not globally descending.
-  const groups = await page.$$eval('.card', (cards) => cards
-    .filter((c) => c.querySelector('.row-meta .num'))
-    .map((c) => [...c.querySelectorAll('.row-meta .num')].map((x) => Number(x.textContent.replace(/\D/g, '')))))
-  for (const g of groups) {
-    const sorted = [...g].sort((a, b) => b - a)
-    if (JSON.stringify(g) !== JSON.stringify(sorted)) throw new Error(`group not descending: ${g}`)
+await step('a task belongs to an area and to nothing else', async () => {
+  const { subgoals, goals, freezes } = await readStores(['subgoals', 'goals', 'freezes'])
+  for (const task of subgoals) {
+    if ('goal_id' in task) throw new Error(`task ${task.id} still carries goal_id`)
+    if (!task.area_id) throw new Error(`task ${task.id} has no area`)
   }
-  const firsts = groups.map((g) => g[0])
-  if (JSON.stringify(firsts) !== JSON.stringify([...firsts].sort((a, b) => b - a)))
-    throw new Error(`group order does not follow the sort: ${firsts}`)
-  console.log('      group weights:', JSON.stringify(groups))
-  console.log('      today:', titles.join(' | '))
+  // A goal is an aim: no importance, no tasks, and a status of its own.
+  for (const goal of goals) {
+    if ('importance' in goal) throw new Error(`goal ${goal.id} still carries importance`)
+    if (!['active', 'achieved'].includes(goal.status)) throw new Error(`goal status ${goal.status}`)
+  }
+  // A pause hangs off the habit it pauses.
+  for (const period of freezes) {
+    if (!period.subgoal_id) throw new Error(`freeze ${period.id} is not on a habit`)
+  }
 })
 
-await step('frozen goal is absent from the today list', async () => {
+await step('the day lists habits only — never a to-do', async () => {
   const body = await page.textContent('.screen')
-  if (body.includes('Sunday call')) throw new Error('frozen goal leaked into today')
+  // Both are Health items due around now; only the habit belongs in the list.
+  const listed = await page.$$eval('.card .row-open', (n) => n.map((x) => x.textContent.trim()))
+  if (!listed.includes('Protein target')) throw new Error('a daily habit is missing')
+  const habitGroups = await page.$$eval('.section-label', (n) => n.map((x) => x.textContent))
+  if (!body.includes('To-dos')) throw new Error('the overdue to-do was not surfaced at all')
+  // It is surfaced, but under its own heading rather than mixed in.
+  if (!habitGroups.some((h) => h.startsWith('To-dos'))) {
+    throw new Error('the to-do was not given its own section')
+  }
+})
+
+await step('a paused habit is absent from the day', async () => {
+  const body = await page.textContent('.screen')
+  if (body.includes('Sunday call')) throw new Error('a paused habit leaked into today')
 })
 
 await step('archived task is absent from the list entirely', async () => {
@@ -134,13 +131,7 @@ await step('archived task is absent from the list entirely', async () => {
   if (body.includes('Old warm-up routine')) throw new Error('archived task leaked')
 })
 
-await step('overdue one-time action is flagged', async () => {
-  const body = await page.textContent('.screen')
-  if (!body.includes('Book the domain')) throw new Error('one-time action missing')
-  if (!body.includes('overdue')) throw new Error('not flagged overdue')
-})
-
-await step('ticking an item updates progress', async () => {
+await step('ticking a habit updates progress', async () => {
   const before = await page.textContent('.progress-head .big')
   await page.click('.row:first-of-type .check:not(.cross)')
   await page.waitForTimeout(400)
@@ -168,19 +159,218 @@ await step('crossing out shrinks the target', async () => {
   await page.waitForTimeout(300)
 })
 
-await step('the tab bar has neither a calendar nor a settings tab in it', async () => {
+await step('three tabs, and the removed screens are gone as routes too', async () => {
   const tabs = await page.$$eval('.tab', (els) => els.map((el) => el.getAttribute('href')))
-  if (tabs.includes('/calendar')) throw new Error('the calendar tab is still there')
-  if (tabs.includes('/settings')) throw new Error('the settings tab is still there')
-  if (tabs.length !== 2) throw new Error(`${tabs.length} tabs: ${tabs.join(', ')}`)
-  // And the routes themselves are gone, not merely unlinked.
-  for (const gone of ['/calendar', '/settings']) {
+  if (JSON.stringify(tabs) !== JSON.stringify(['/', '/todos', '/star'])) {
+    throw new Error(`tabs: ${tabs.join(', ')}`)
+  }
+  for (const gone of ['/calendar', '/settings', '/goals/41', '/goals/new']) {
     await page.goto(`${BASE}${gone}`, { waitUntil: 'networkidle' })
     const body = await page.textContent('.screen')
     if (!body.includes('Nothing here')) throw new Error(`${gone} still renders a screen`)
   }
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
 })
+
+// ---------------------------------------------------------------------------
+// The to-do list
+// ---------------------------------------------------------------------------
+
+await step('the to-do screen lists to-dos only, in deadline piles', async () => {
+  await page.click('.tab[href="/todos"]')
+  await page.waitForSelector('.row-open')
+  const body = await page.textContent('.screen')
+  if (!body.includes('Book a physio appointment')) throw new Error('overdue to-do missing')
+  if (!body.includes('Renew the passport')) throw new Error('undated to-do missing')
+  if (body.includes('Gym session')) throw new Error('a habit leaked into the to-do list')
+  const sections = await page.$$eval('.section-label', (n) => n.map((x) => x.textContent.trim()))
+  if (!sections.some((s) => s.startsWith('Overdue'))) throw new Error(`sections: ${sections}`)
+  if (!sections.some((s) => s.startsWith('No date'))) throw new Error(`sections: ${sections}`)
+})
+
+await step('the tab badge counts what is overdue', async () => {
+  const badge = await page.textContent('.tab-badge')
+  if (badge.trim() !== '1') throw new Error(`badge reads ${badge}`)
+})
+
+await step('a to-do ticked stays on the list, marked finished', async () => {
+  await page.click('.row:has-text("Renew the passport") .check:not(.cross)')
+  await page.waitForTimeout(500)
+  const sections = await page.$$eval('.section-label', (n) => n.map((x) => x.textContent.trim()))
+  if (!sections.some((s) => s.startsWith('Finished'))) throw new Error(`sections: ${sections}`)
+  await page.click('.row:has-text("Renew the passport") .check:not(.cross)')
+  await page.waitForTimeout(400)
+})
+
+await step('adding from the to-do screen writes a to-do, not a habit', async () => {
+  await page.click('.add-task')
+  await page.waitForSelector('.composer-input')
+  const pressed = await page.getAttribute('.kindswitch-btn:has-text("To-do")', 'aria-pressed')
+  if (pressed !== 'true') throw new Error('the to-do screen did not open on To-do')
+  await page.fill('.composer-input', 'Post the parcel')
+  await page.click('.composer-submit')
+  await page.waitForTimeout(600)
+  const { subgoals } = await readStores(['subgoals'])
+  const stored = subgoals.find((s) => s.title === 'Post the parcel')
+  if (!stored) throw new Error('nothing was written')
+  if (stored.cadence_type !== 'once') throw new Error(`cadence ${stored.cadence_type}`)
+})
+
+await step('adding from the day screen writes a habit, not a to-do', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.click('.add-task')
+  await page.waitForSelector('.composer-input')
+  const pressed = await page.getAttribute('.kindswitch-btn:has-text("Habit")', 'aria-pressed')
+  if (pressed !== 'true') throw new Error('the day screen did not open on Habit')
+  if (!(await page.$('.chip.imp-low'))) throw new Error('a new task did not open on P3')
+  await page.fill('.composer-input', 'Morning walk')
+  await page.click('.composer-submit')
+  await page.waitForTimeout(600)
+  const { subgoals } = await readStores(['subgoals'])
+  const stored = subgoals.find((s) => s.title === 'Morning walk')
+  // "Every day" is stored as a weekly repeat on all seven weekdays — the
+  // preset's shape since §4, not a `daily` cadence_type.
+  if (stored.cadence_type !== 'weekly') throw new Error(`cadence ${stored.cadence_type}`)
+  if (stored.days.length !== 7) throw new Error(`days ${JSON.stringify(stored.days)}`)
+  if (stored.due_date != null) throw new Error('a habit must not carry a deadline')
+})
+
+await step('the switch turns one into the other, and only touches the repeat', async () => {
+  await page.click('.row-open:has-text("Morning walk")')
+  await page.waitForSelector('text=Pause habit')
+  await page.click('.btn:has-text("Edit")')
+  await page.waitForSelector('.composer-input')
+  await page.click('.kindswitch-btn:has-text("To-do")')
+  await page.click('.composer-submit')
+  await page.waitForTimeout(600)
+  const { subgoals } = await readStores(['subgoals'])
+  const stored = subgoals.find((s) => s.title === 'Morning walk')
+  if (stored.cadence_type !== 'once') throw new Error(`cadence ${stored.cadence_type}`)
+  if (stored.importance !== 'low') throw new Error('the switch moved the priority')
+  if (stored.area_id !== 1) throw new Error('the switch moved the area')
+})
+
+// ---------------------------------------------------------------------------
+// The composer's pickers
+// ---------------------------------------------------------------------------
+
+await step('the repeat sheet has a way back to the date sheet', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.click('.add-task')
+  await page.waitForSelector('.composer-input')
+  await page.click('.composer-chips .chip:nth-child(2)')
+  await page.waitForSelector('.cal')
+  await page.click('.sheet-foot-row button[aria-label="Repeat"]')
+  await page.waitForSelector('.sheet-row:has-text("Every day")')
+  await page.click('.sheet-foot-row button:has-text("Back")')
+  await page.waitForSelector('.cal', { timeout: 4000 })
+  await page.click('.sheet-close')
+  await page.waitForSelector('.sheet', { state: 'detached' })
+  await page.click('.composer-cancel')
+})
+
+await step('the area picker offers areas and nothing under them', async () => {
+  await page.click('.add-task')
+  await page.fill('.composer-input', 'Call the bank p1')
+  const typed = await page.inputValue('.composer-input')
+  if (typed !== 'Call the bank') throw new Error(`the p1 token was not consumed: "${typed}"`)
+  if (!(await page.$('.chip.imp-high'))) throw new Error('p1 did not set the priority')
+  await page.click('.composer-chips .chip:first-child')
+  await page.waitForSelector('.sheet-row:has-text("Money")')
+  const body = await page.textContent('.sheet')
+  if (body.includes('Create new goal')) throw new Error('the goal tier is still in the picker')
+  if (body.includes('only')) throw new Error('the picker still has a second level')
+  await page.click('.sheet-row:has-text("Money")')
+  await page.waitForSelector('.sheet', { state: 'detached' })
+  await page.click('.composer-submit')
+  await page.waitForTimeout(600)
+  const { subgoals } = await readStores(['subgoals'])
+  const stored = subgoals.find((s) => s.title === 'Call the bank')
+  if (stored.area_id !== 8) throw new Error(`area_id ${stored.area_id}`)
+  if (stored.importance !== 'high') throw new Error(`importance ${stored.importance}`)
+})
+
+await step('a repeat picked from the date sheet stores Monday-first weekdays', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.click('.add-task')
+  await page.fill('.composer-input', 'Sailing lesson')
+  await page.click('.composer-chips .chip:nth-child(2)')
+  await page.waitForSelector('.cal')
+  await page.click('.sheet-row:has-text("This weekend")')
+  await page.waitForTimeout(150)
+  await page.click('.sheet-foot-row button[aria-label="Repeat"]')
+  await page.waitForSelector('.sheet-row:has-text("Every week on Saturday")')
+  await page.click('.sheet-row:has-text("Every week on Saturday")')
+  // Picking a preset is the whole answer, so it closes the pickers outright (§7).
+  await page.waitForSelector('.sheet', { state: 'detached', timeout: 4000 })
+  await page.click('.composer-submit')
+  await page.waitForTimeout(600)
+  const { subgoals } = await readStores(['subgoals'])
+  const stored = subgoals.find((s) => s.title === 'Sailing lesson')
+  if (stored.cadence_type !== 'weekly') throw new Error(`cadence ${stored.cadence_type}`)
+  // Saturday is weekday 5, Monday-first (§2) — the single most repeated bug.
+  if (JSON.stringify(stored.days) !== '[5]') throw new Error(`days ${JSON.stringify(stored.days)}`)
+  if (stored.start_date == null) throw new Error('no start date stored')
+  if (stored.due_date != null) throw new Error('a repeating task must not carry a deadline')
+})
+
+await step('a custom repeat stores its interval and its inclusive end date', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.click('.add-task')
+  await page.fill('.composer-input', 'Deep clean')
+  await page.click('.composer-chips .chip:nth-child(2)')
+  await page.waitForSelector('.cal')
+  await page.click('.sheet-row:has-text("Tomorrow")')
+  await page.waitForTimeout(150)
+  await page.click('.sheet-foot-row button[aria-label="Repeat"]')
+  await page.waitForSelector('.sheet-row:has-text("Custom")')
+  await page.click('.sheet-row:has-text("Custom")')
+  await page.waitForSelector('text=Custom repeat')
+  await page.fill('input[aria-label="Interval"]', '4')
+  await page.click('.segmented button:has-text("On date")')
+  await page.fill('input[aria-label="Last day, inclusive"]', '2026-12-31')
+  await page.click('.sheet-foot-row button:has-text("Save")')
+  await page.waitForSelector('.sheet', { state: 'detached', timeout: 4000 })
+  await page.click('.composer-submit')
+  await page.waitForTimeout(600)
+  const { subgoals } = await readStores(['subgoals'])
+  const stored = subgoals.find((s) => s.title === 'Deep clean')
+  if (stored.interval !== 4) throw new Error(`interval ${stored.interval}`)
+  if (stored.repeat_until !== '2026-12-31') throw new Error(`until ${stored.repeat_until}`)
+})
+
+await step('the date sheet stays open on a pick, and marks the day', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.click('.add-task')
+  await page.fill('.composer-input', 'Sheet stays open')
+  await page.click('.composer-chips .chip:nth-child(2)')
+  await page.waitForSelector('.cal')
+
+  const rows = await page.$$eval('.sheet-body .sheet-row', (els) =>
+    els.map((el) => el.querySelector('.sheet-row-label').textContent),
+  )
+  for (const want of ['Today', 'Tomorrow', 'This weekend', 'No date']) {
+    if (!rows.includes(want)) throw new Error(`${want} is missing`)
+  }
+
+  await page.click('.sheet-row:has-text("Tomorrow")')
+  await page.waitForTimeout(150)
+  if (!(await page.$('.sheet'))) throw new Error('the sheet closed on a pick')
+  const picked = await page.$$('.cal-day.is-picked')
+  if (picked.length !== 1) throw new Error(`${picked.length} days highlighted`)
+  await page.click('.cal-day:not(.is-outside):not(.is-picked) >> nth=20')
+  await page.waitForTimeout(150)
+  if (!(await page.$('.sheet'))) throw new Error('the sheet closed on a grid pick')
+  if ((await page.$$('.cal-day.is-picked')).length !== 1) throw new Error('highlight did not move')
+
+  await page.click('.sheet-scrim', { position: { x: 5, y: 5 } })
+  await page.waitForSelector('.sheet', { state: 'detached' })
+  await page.click('.composer-cancel')
+})
+
+// ---------------------------------------------------------------------------
+// The star, the areas, and the aims inside them
+// ---------------------------------------------------------------------------
 
 await step('star renders with scores and one em dash', async () => {
   await page.click('.tab[href="/star"]')
@@ -191,248 +381,184 @@ await step('star renders with scores and one em dash', async () => {
   console.log('      ' + desc.slice(0, 150))
 })
 
-await step('clicking a vertex opens the area', async () => {
+await step('adding an area adds a spoke, and the chart redraws around it', async () => {
+  const before = (await page.$$('.star-vertex')).length
+  await page.click('.topbar button:has-text("Edit")')
+  await page.waitForSelector('.area-add')
+  await page.fill('.area-add input', 'Learning')
+  await page.click('.area-add button:has-text("Add")')
+  await page.waitForTimeout(600)
+  const after = (await page.$$('.star-vertex')).length
+  if (after !== before + 1) throw new Error(`${before} spokes -> ${after}`)
+  const desc = await page.getAttribute('.star-svg', 'aria-label')
+  if (!desc.includes('Learning')) throw new Error('the new area is not on the chart')
+})
+
+await step('renaming an area is written on blur', async () => {
+  await page.fill('input[aria-label="Name of Learning"]', 'Learning & reading')
+  await page.click('h1')
+  await page.waitForTimeout(500)
+  const { areas } = await readStores(['areas'])
+  if (!areas.some((a) => a.name === 'Learning & reading' && !a.deleted)) {
+    throw new Error(`areas: ${areas.map((a) => a.name).join(', ')}`)
+  }
+})
+
+await step('reordering an area moves it around the ring', async () => {
+  const before = await page.$$eval('.edit-name', (n) => n.map((x) => x.value))
+  await page.click(`.edit-row:nth-child(2) .edit-arrow:first-child`)
+  await page.waitForTimeout(500)
+  const after = await page.$$eval('.edit-name', (n) => n.map((x) => x.value))
+  if (after[0] !== before[1]) throw new Error(`${before.slice(0, 3)} -> ${after.slice(0, 3)}`)
+  if (after.length !== before.length) throw new Error('an area went missing in the move')
+  await page.click(`.edit-row:first-child .edit-arrow:last-child`)
+  await page.waitForTimeout(500)
+})
+
+await step('removing an area archives its habits rather than deleting them', async () => {
+  const before = (await page.$$('.star-vertex')).length
+  await page.click('button[aria-label="Remove Hobbies"]')
+  await page.waitForSelector('.confirm')
+  const question = await page.textContent('.confirm p')
+  if (!question.includes('archived')) throw new Error(`confirmation says: ${question}`)
+  if (!question.includes('habit')) throw new Error('the confirmation did not count the habits')
+  await page.click('.confirm button:has-text("Remove it")')
+  await page.waitForTimeout(700)
+
+  const after = (await page.$$('.star-vertex')).length
+  if (after !== before - 1) throw new Error(`${before} spokes -> ${after}`)
+  const { areas, subgoals, checkins } = await readStores(['areas', 'subgoals', 'checkins'])
+  const hobbies = areas.find((a) => a.name === 'Hobbies')
+  if (!hobbies) throw new Error('the area row was hard-deleted')
+  if (!hobbies.deleted) throw new Error('the area was not tombstoned')
+  const guitar = subgoals.find((s) => s.id === 112)
+  if (!guitar.archived || guitar.deleted) throw new Error(JSON.stringify(guitar))
+  if (!checkins.some((c) => c.subgoal_id === 112)) throw new Error('its check-ins were destroyed')
+
+  // Positions compact, so the ring has no gap for the next insert to land in.
+  const live = areas.filter((a) => !a.deleted).map((a) => a.position).sort((a, b) => a - b)
+  if (JSON.stringify(live) !== JSON.stringify(live.map((_, i) => i))) {
+    throw new Error(`positions did not compact: ${live}`)
+  }
+  await page.click('.topbar button:has-text("Done")')
+})
+
+await step('clicking a vertex opens the area, aims first', async () => {
   await page.click('.star-vertex')
   await page.waitForSelector('.backlink')
-  const h = await page.textContent('h1')
-  console.log(`      opened area: ${h}`)
+  const labels = await page.$$eval('.section-label', (n) => n.map((x) => x.textContent.trim()))
+  if (labels[0] !== 'What are you aiming for?') throw new Error(`first section: ${labels[0]}`)
+  if (!labels.some((l) => l.startsWith('Habits'))) throw new Error(`sections: ${labels}`)
 })
 
-await step('goal screen lists its tasks, with no day grid above them', async () => {
-  await page.goto(`${BASE}/goals/41`, { waitUntil: 'networkidle' })
-  await page.waitForSelector('.row-button')
-  if (await page.$('.daygrid')) throw new Error('the 15-week grid is still on the goal')
+await step('the area screen shows aims above habits, and no goal owns a task', async () => {
+  await page.goto(`${BASE}/areas/1`, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.goal-row')
   const body = await page.textContent('.screen')
-  if (!body.includes('Gym session')) throw new Error('tasks missing')
-  if (body.includes('Old warm-up')) throw new Error('archived task shown')
+  if (!body.includes('Reach 100 kg bench press')) throw new Error('the aim is missing')
+  if (!body.includes('Gym session')) throw new Error('the habits are missing')
+  if (body.includes('Old warm-up')) throw new Error('an archived habit is shown')
+  // The aim sits above the habits, not around them.
+  const goalY = await page.$eval('.goal-row', (el) => el.getBoundingClientRect().top)
+  const habitY = await page.$eval('.row-button', (el) => el.getBoundingClientRect().top)
+  if (goalY >= habitY) throw new Error('the aims are not above the habits')
 })
 
-await step('freeze then unfreeze a goal', async () => {
-  await page.click('text=Freeze goal')
-  await page.waitForSelector('text=Unfreeze goal', { timeout: 5000 })
+await step('a goal is written inline, and reaching it is one tap', async () => {
+  await page.fill('.goal-add-input', 'Touch my toes')
+  await page.click('.goal-add button:has-text("Add")')
+  await page.waitForSelector('.goal-row:has-text("Touch my toes")')
+  await page.click('.goal-row:has-text("Touch my toes") .goal-check')
+  await page.waitForTimeout(500)
+  const { goals } = await readStores(['goals'])
+  const stored = goals.find((g) => g.title === 'Touch my toes')
+  if (stored.status !== 'achieved') throw new Error(`status ${stored.status}`)
+  if (!stored.achieved_on) throw new Error('reaching a goal did not date it')
   const body = await page.textContent('.screen')
-  if (!body.includes('Frozen')) throw new Error('no frozen indication')
-  await page.click('text=Unfreeze goal')
-  await page.waitForSelector('text=Freeze goal', { timeout: 5000 })
+  if (!body.includes('Reached')) throw new Error('no reached section')
 })
 
-await step('create a goal through the editor — a heading, with no priority on it', async () => {
-  await page.goto(`${BASE}/goals/new`, { waitUntil: 'networkidle' })
-  await page.fill('#goal-title', 'Learn to sail')
-  await page.selectOption('#goal-area', { label: 'Hobbies' })
-  // A goal is a heading now: no importance control, and no task list (§3).
-  if (await page.$('.segmented')) throw new Error('goal editor still asks for importance')
-  await page.click('text=Create goal')
-  await page.waitForSelector('h1:has-text("Learn to sail")', { timeout: 6000 })
-})
-
-await step('a new task opens on P3, and the repeat sheet has a way back', async () => {
-  await page.click('.add-task')
-  await page.waitForSelector('.composer-input')
-  if (!(await page.$('.chip.imp-low'))) throw new Error('a new task did not open on P3')
-  await page.click('.chip:has-text("Date")')
-  await page.waitForSelector('.cal')
-  await page.click('.sheet-foot-row button:has-text("Repeat")')
-  await page.waitForSelector('.sheet-row:has-text("Every day")')
-  // Back returns to the date sheet it was opened from, rather than closing.
-  await page.click('.sheet-foot-row button:has-text("Back")')
-  await page.waitForSelector('.cal', { timeout: 4000 })
-  await page.click('.sheet-close')
-  await page.waitForSelector('.sheet', { state: 'detached' })
-})
-
-await step('add a task to the goal through the composer', async () => {
-  await page.fill('.composer-input', 'Sailing lesson p1')
-  // The p1 token sets the priority and leaves the title behind.
-  const typed = await page.inputValue('.composer-input')
-  if (typed !== 'Sailing lesson') throw new Error(`title reads "${typed}"`)
-  if (!(await page.$('.chip.imp-high'))) throw new Error('p1 did not set the priority')
-  await page.click('.composer-submit')
-  await page.waitForSelector('.composer-input', { state: 'detached', timeout: 6000 })
-  const body = await page.textContent('.screen')
-  if (!body.includes('Sailing lesson')) throw new Error('task not listed on the goal')
-})
-
-await step('a repeat picked from the date sheet reads back in words', async () => {
-  await page.click('.row-button:has-text("Sailing lesson")')
-  await page.waitForSelector('.composer-input')
-  await page.click('.chip:has-text("Date")')
-  await page.waitForSelector('.cal')
-  await page.click('.sheet-row:has-text("This weekend")')
-  await page.waitForTimeout(150)
-  await page.click('.sheet-foot-row button:has-text("Repeat")')
-  await page.waitForSelector('.sheet-row:has-text("Every week on Saturday")')
-  await page.click('.sheet-row:has-text("Every week on Saturday")')
-  // Picking a preset is the whole answer, so it closes the pickers outright —
-  // no tap on ✕, and no landing back on the calendar (§7).
-  await page.waitForSelector('.sheet', { state: 'detached', timeout: 4000 })
-  await page.click('.composer-submit')
+await step('removing a goal leaves every habit in the area alone', async () => {
+  const before = (await page.$$('.row-button')).length
+  await page.click('.goal-row:has-text("Touch my toes") .goal-title')
+  await page.waitForSelector('.goal-body')
+  await page.click('.goal-body button:has-text("Remove goal")')
+  await page.waitForSelector('.confirm')
+  await page.click('.confirm button:has-text("Remove it")')
   await page.waitForTimeout(600)
-  const stored = await page.evaluate(async () => {
-    const req = indexedDB.open('startem')
-    const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
-    const tx = db.transaction('subgoals', 'readonly')
-    const r = tx.objectStore('subgoals').getAll()
-    const all = await new Promise((res) => { r.onsuccess = () => res(r.result) })
-    return all.find((s) => s.title === 'Sailing lesson')
-  })
-  if (stored.cadence_type !== 'weekly') throw new Error(`cadence ${stored.cadence_type}`)
-  // Saturday is weekday 5, Monday-first (§2) — the single most repeated bug.
-  if (JSON.stringify(stored.days) !== '[5]') throw new Error(`days ${JSON.stringify(stored.days)}`)
-  if (stored.importance !== 'high') throw new Error(`importance ${stored.importance}`)
-  if (stored.start_date == null) throw new Error('no start date stored')
-  if (stored.due_date != null) throw new Error('a repeating task must not carry a deadline')
+  const { goals, subgoals } = await readStores(['goals', 'subgoals'])
+  const stored = goals.find((g) => g.title === 'Touch my toes')
+  if (!stored) throw new Error('the goal row was hard-deleted')
+  if (!stored.deleted) throw new Error('the goal was not tombstoned')
+  const gym = subgoals.find((s) => s.id === 101)
+  if (gym.archived || gym.deleted) throw new Error('the goal took a habit down with it')
+  const after = (await page.$$('.row-button')).length
+  if (after !== before) throw new Error(`${before} habits -> ${after}`)
 })
 
-await step('a custom repeat stores its interval and its inclusive end date', async () => {
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.add-task')
-  await page.fill('.composer-input', 'Deep clean')
-  await page.click('.chip:has-text("Date")')
-  await page.waitForSelector('.cal')
-  await page.click('.sheet-row:has-text("Tomorrow")')
-  await page.waitForTimeout(150)
-  await page.click('.sheet-foot-row button:has-text("Repeat")')
-  await page.waitForSelector('.sheet-row:has-text("Custom")')
-  await page.click('.sheet-row:has-text("Custom")')
-  await page.waitForSelector('text=Custom repeat')
-  await page.fill('input[aria-label="Interval"]', '4')
-  await page.click('.segmented button:has-text("On date")')
-  await page.fill('input[aria-label="Last day, inclusive"]', '2026-12-31')
-  await page.click('.sheet-foot-row button:has-text("Save")')
-  // Save commits the custom repeat the same way a preset does — straight out.
-  await page.waitForSelector('.sheet', { state: 'detached', timeout: 4000 })
-  await page.click('.composer-submit')
-  await page.waitForTimeout(600)
-  const stored = await page.evaluate(async () => {
-    const req = indexedDB.open('startem')
-    const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
-    const tx = db.transaction('subgoals', 'readonly')
-    const r = tx.objectStore('subgoals').getAll()
-    const all = await new Promise((res) => { r.onsuccess = () => res(r.result) })
-    return all.find((s) => s.title === 'Deep clean')
-  })
-  if (stored.interval !== 4) throw new Error(`interval ${stored.interval}`)
-  if (stored.repeat_until !== '2026-12-31') throw new Error(`until ${stored.repeat_until}`)
-})
+// ---------------------------------------------------------------------------
+// One habit, up close
+// ---------------------------------------------------------------------------
 
-await step('the date sheet stays open on a pick, and marks the day', async () => {
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.add-task')
-  await page.fill('.composer-input', 'Sheet stays open')
-  await page.click('.chip:has-text("Date")')
-  await page.waitForSelector('.cal')
-
-  // Next week is gone; the other three shortcuts and No date stay.
-  const rows = await page.$$eval('.sheet-body .sheet-row', (els) =>
-    els.map((el) => el.querySelector('.sheet-row-label').textContent),
-  )
-  if (rows.includes('Next week')) throw new Error('Next week is still offered')
-  for (const want of ['Today', 'Tomorrow', 'This weekend', 'No date']) {
-    if (!rows.includes(want)) throw new Error(`${want} is missing`)
-  }
-
-  await page.click('.sheet-row:has-text("Tomorrow")')
-  await page.waitForTimeout(150)
-  if (!(await page.$('.sheet'))) throw new Error('the sheet closed on a pick')
-
-  // The chosen day is marked in the month grid, and picking again from the
-  // grid still leaves the sheet up.
-  const picked = await page.$$('.cal-day.is-picked')
-  if (picked.length !== 1) throw new Error(`${picked.length} days highlighted`)
-  await page.click('.cal-day:not(.is-outside):not(.is-picked) >> nth=20')
-  await page.waitForTimeout(150)
-  if (!(await page.$('.sheet'))) throw new Error('the sheet closed on a grid pick')
-  if ((await page.$$('.cal-day.is-picked')).length !== 1) throw new Error('highlight did not move')
-
-  // Dismissed by the backdrop, as before.
-  await page.click('.sheet-scrim', { position: { x: 5, y: 5 } })
-  await page.waitForSelector('.sheet', { state: 'detached' })
-  await page.click('.composer-cancel')
-})
-
-await step('a task can be attached to an area with no goal at all', async () => {
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.add-task')
-  await page.fill('.composer-input', 'Call the bank')
-  await page.click('.composer-chips .chip:first-child')
-  await page.waitForSelector('.sheet-row:has-text("Money")')
-  await page.click('.sheet-row:has-text("Money")')
-  await page.waitForSelector('text=Create new goal')
-  await page.click('.sheet-row:has-text("Money only")')
-  await page.waitForSelector('.sheet', { state: 'detached' })
-  await page.click('.composer-submit')
-  await page.waitForTimeout(600)
-  const stored = await page.evaluate(async () => {
-    const req = indexedDB.open('startem')
-    const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
-    const tx = db.transaction('subgoals', 'readonly')
-    const r = tx.objectStore('subgoals').getAll()
-    const all = await new Promise((res) => { r.onsuccess = () => res(r.result) })
-    return all.find((s) => s.title === 'Call the bank')
-  })
-  if (stored.goal_id != null) throw new Error(`goal_id ${stored.goal_id}`)
-  if (stored.area_id !== 8) throw new Error(`area_id ${stored.area_id}`)
+await step('the tracker grid hangs off the habit, not off a goal', async () => {
+  await page.goto(`${BASE}/tasks/101`, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.daygrid')
+  const weeks = (await page.$$('.daygrid-week')).length
+  if (weeks !== 15) throw new Error(`${weeks} weeks in the grid`)
+  const days = (await page.$$('.daygrid-week:first-child .daycell')).length
+  if (days !== 7) throw new Error(`${days} days in a week`)
   const body = await page.textContent('.screen')
-  if (!body.includes('Call the bank')) throw new Error('goal-less task missing from the list')
+  if (!body.includes('Kept')) throw new Error('no rate on the habit')
+  if (!body.includes('Streak')) throw new Error('no streak on the habit')
+})
+
+await step('pausing a habit takes it out of the day, and resuming brings it back', async () => {
+  await page.click('.btn:has-text("Pause habit")')
+  await page.waitForSelector('.btn:has-text("Resume habit")', { timeout: 5000 })
+  const { freezes } = await readStores(['freezes'])
+  const open = freezes.filter((f) => f.subgoal_id === 101 && !f.deleted && f.end_date == null)
+  if (open.length !== 1) throw new Error(`${open.length} open periods`)
+  await page.click('.btn:has-text("Resume habit")')
+  await page.waitForSelector('.btn:has-text("Pause habit")', { timeout: 5000 })
+})
+
+await step('a to-do gets the editor and no tracker at all', async () => {
+  await page.goto(`${BASE}/tasks/113`, { waitUntil: 'networkidle' })
+  await page.waitForSelector('h1')
+  if (await page.$('.daygrid')) throw new Error('a to-do was given a tracker grid')
+  const body = await page.textContent('.screen')
+  if (!body.includes('happens once')) throw new Error('no explanation of what a to-do is')
 })
 
 await step('archiving a task keeps the row and its check-ins', async () => {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.row-open:has-text("Call the bank")')
+  await page.click('.row-open:has-text("Protein target")')
+  await page.click('.btn:has-text("Edit")')
   await page.waitForSelector('text=Archive this task')
   await page.click('text=Archive this task')
-  await page.waitForTimeout(600)
-  const stored = await page.evaluate(async () => {
-    const req = indexedDB.open('startem')
-    const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
-    const tx = db.transaction('subgoals', 'readonly')
-    const r = tx.objectStore('subgoals').getAll()
-    const all = await new Promise((res) => { r.onsuccess = () => res(r.result) })
-    return all.find((s) => s.title === 'Call the bank')
-  })
+  await page.waitForTimeout(700)
+  const { subgoals } = await readStores(['subgoals'])
+  const stored = subgoals.find((s) => s.id === 102)
   if (!stored) throw new Error('the task row was deleted outright')
   if (!stored.archived || stored.deleted) throw new Error(JSON.stringify(stored))
 })
 
-await step('deleting a goal detaches its tasks rather than destroying them', async () => {
-  await page.goto(`${BASE}/goals/41`, { waitUntil: 'networkidle' })
-  await page.waitForSelector('text=Delete goal')
-  await page.click('text=Delete goal')
-  await page.waitForSelector('text=Delete it')
-  await page.click('text=Delete it')
-  await page.waitForTimeout(700)
-  const rows = await page.evaluate(async () => {
-    const req = indexedDB.open('startem')
-    const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
-    const tx = db.transaction(['goals','subgoals','checkins'], 'readonly')
-    const get = (store) => new Promise((res) => { const r = tx.objectStore(store).getAll(); r.onsuccess = () => res(r.result) })
-    const [goals, subgoals, checkins] = await Promise.all([get('goals'), get('subgoals'), get('checkins')])
-    return { goal: goals.find((g) => g.id === 41), gym: subgoals.find((s) => s.id === 101), checkins: checkins.filter((c) => c.subgoal_id === 101).length }
-  })
-  if (!rows.goal) throw new Error('goal row was hard-deleted')
-  if (!rows.goal.deleted) throw new Error('goal not tombstoned')
-  // The heading is gone; the work under it is not (§3).
-  if (rows.gym.deleted) throw new Error('the goal took its tasks down with it')
-  if (rows.gym.goal_id != null) throw new Error(`task still points at the goal: ${rows.gym.goal_id}`)
-  if (rows.gym.area_id !== 1) throw new Error(`task lost its area: ${rows.gym.area_id}`)
-  if (rows.checkins === 0) throw new Error('check-ins were destroyed with the goal')
-})
-
 await step('deep link survives a reload', async () => {
-  // Goal 43 rather than 41: 41 is the one the delete test above tombstoned.
-  await page.goto(`${BASE}/goals/43`, { waitUntil: 'networkidle' })
+  await page.goto(`${BASE}/areas/3`, { waitUntil: 'networkidle' })
   await page.reload({ waitUntil: 'networkidle' })
   await page.waitForSelector('h1')
   const h = await page.textContent('h1')
-  if (!h.includes('Startem v2')) throw new Error(`h1 after reload: ${h}`)
+  if (!h.includes('Work')) throw new Error(`h1 after reload: ${h}`)
 })
 
-await step('a v1 device upgrades in place, carrying importance down onto its tasks', async () => {
+// ---------------------------------------------------------------------------
+// The upgrade path — the one thing a fresh install can never exercise
+// ---------------------------------------------------------------------------
+
+await step('a v2 device flattens in place, keeping its pauses', async () => {
   // A separate context, so this starts from an empty origin and can write the
-  // *old* schema before the app ever opens the database. This is the one path
-  // that cannot be exercised by a fresh install, and the one where getting the
-  // order wrong resets every task on the device to `medium` (§3).
+  // *old* schema before the app ever opens the database. Getting this wrong
+  // back-fills every dormant week of a frozen goal with misses (§3).
   const old = await browser.newContext({ viewport: { width: 414, height: 896 } })
   const p2 = await old.newPage()
   // A static asset, not the app: loading the app would open Dexie at the
@@ -440,31 +566,40 @@ await step('a v1 device upgrades in place, carrying importance down onto its tas
   await p2.goto(`${BASE}/icon-192.png`, { waitUntil: 'domcontentloaded' })
   await p2.evaluate(async () => {
     const db = await new Promise((res, rej) => {
-      // Dexie stores its own version × 10, so a v1 device is IndexedDB 10.
-      const req = indexedDB.open('startem', 10)
+      // Dexie stores its own version × 10, so a v2 device is IndexedDB 20.
+      const req = indexedDB.open('startem', 20)
       req.onupgradeneeded = () => {
         const d = req.result
         d.createObjectStore('areas', { keyPath: 'id' })
         d.createObjectStore('goals', { keyPath: 'id' })
-        d.createObjectStore('subgoals', { keyPath: 'id' })
+        const sub = d.createObjectStore('subgoals', { keyPath: 'id' })
+        sub.createIndex('goal_id', 'goal_id')
         d.createObjectStore('checkins', { keyPath: ['subgoal_id', 'date'] })
-        d.createObjectStore('freezes', { keyPath: 'id' })
+        d.createObjectStore('freezes', { keyPath: 'id' }).createIndex('goal_id', 'goal_id')
         d.createObjectStore('meta', { keyPath: 'key' })
       }
       req.onsuccess = () => res(req.result)
       req.onerror = () => rej(req.error)
     })
-    const tx = db.transaction(['areas', 'goals', 'subgoals'], 'readwrite')
+    const tx = db.transaction(['areas', 'goals', 'subgoals', 'checkins', 'freezes', 'meta'], 'readwrite')
+    tx.objectStore('meta').put({ key: 'device_key', value: 9 })
+    tx.objectStore('meta').put({ key: 'id_counter', value: 60 })
     tx.objectStore('areas').put({ id: 1, name: 'Health', position: 0, deleted: false })
     tx.objectStore('goals').put({
-      id: 41, area_id: 1, title: 'Bench 100 kg', description: '',
-      status: 'active', importance: 'high', created_at: '2026-01-04', deleted: false,
+      id: 41, area_id: 1, title: 'Sleep well', description: '',
+      status: 'frozen', created_at: '2026-01-04', deleted: false,
     })
-    tx.objectStore('subgoals').put({
-      id: 101, goal_id: 41, title: 'Gym session', cadence_type: 'weekly',
-      days: [0, 2, 5], monthly_day: null, month_weekday: null, month_ordinal: null,
-      due_date: null, weight: null, created_at: '2026-01-04', archived: false, deleted: false,
-    })
+    const base = {
+      importance: 'medium', cadence_type: 'daily', interval: 1, days: [],
+      monthly_day: null, month_weekday: null, month_ordinal: null, due_date: null,
+      start_date: null, repeat_until: null, time: null, weight: null,
+      created_at: '2026-01-04', archived: false, deleted: false,
+    }
+    tx.objectStore('subgoals').put({ id: 101, goal_id: 41, title: 'Lights out', ...base })
+    // No area_id of its own: it has to inherit the goal's.
+    tx.objectStore('subgoals').put({ id: 102, goal_id: 41, title: 'No screens', ...base, area_id: undefined })
+    tx.objectStore('checkins').put({ subgoal_id: 101, date: '2026-01-05', status: 'done' })
+    tx.objectStore('freezes').put({ id: 7, goal_id: 41, start_date: '2026-02-01', end_date: null, deleted: false })
     await new Promise((res) => { tx.oncomplete = res })
     db.close()
   })
@@ -474,18 +609,32 @@ await step('a v1 device upgrades in place, carrying importance down onto its tas
   const after = await p2.evaluate(async () => {
     const req = indexedDB.open('startem')
     const db = await new Promise((res) => { req.onsuccess = () => res(req.result) })
-    const tx = db.transaction(['goals', 'subgoals'], 'readonly')
-    const get = (s) => new Promise((res) => { const r = tx.objectStore(s).get(s === 'goals' ? 41 : 101); r.onsuccess = () => res(r.result) })
-    return { version: db.version, goal: await get('goals'), task: await get('subgoals') }
+    const tx = db.transaction(['goals', 'subgoals', 'checkins', 'freezes'], 'readonly')
+    const all = (s) => new Promise((res) => { const r = tx.objectStore(s).getAll(); r.onsuccess = () => res(r.result) })
+    return {
+      version: db.version,
+      goals: await all('goals'),
+      subgoals: await all('subgoals'),
+      checkins: await all('checkins'),
+      freezes: await all('freezes'),
+    }
   })
   await old.close()
 
-  if (after.version < 2) throw new Error(`still on version ${after.version}`)
-  if (after.goal.importance !== undefined) throw new Error('goal kept its importance')
-  if (after.task.importance !== 'high') throw new Error(`task importance ${after.task.importance}`)
-  if (after.task.area_id !== 1) throw new Error(`task area_id ${after.task.area_id}`)
-  if (after.task.interval !== 1) throw new Error(`task interval ${after.task.interval}`)
-  if (after.task.start_date !== null) throw new Error('start_date not backfilled')
+  if (after.version < 30) throw new Error(`still on IndexedDB version ${after.version}`)
+  for (const task of after.subgoals) {
+    if ('goal_id' in task) throw new Error(`task ${task.id} kept goal_id`)
+    if (task.area_id !== 1) throw new Error(`task ${task.id} area_id ${task.area_id}`)
+  }
+  if (after.checkins.length !== 1) throw new Error('a check-in was lost in the upgrade')
+  // The pause was the goal's; it now covers both habits it was actually
+  // pausing, with the original id kept on one of them so sync sees no churn.
+  const ids = after.freezes.map((f) => f.subgoal_id).sort()
+  if (JSON.stringify(ids) !== '[101,102]') throw new Error(`freezes on ${JSON.stringify(ids)}`)
+  if (!after.freezes.some((f) => f.id === 7)) throw new Error('the original period id was lost')
+  const minted = after.freezes.find((f) => f.id !== 7)
+  if (Math.floor(minted.id / 2 ** 20) !== 9) throw new Error(`minted id ${minted.id} is not this device's`)
+  if (after.goals[0].status !== 'active') throw new Error(`goal status ${after.goals[0].status}`)
 })
 
 await step('no browser dialogs are used anywhere', async () => {
@@ -494,11 +643,18 @@ await step('no browser dialogs are used anywhere', async () => {
   if (fired) throw new Error('a dialog fired')
 })
 
-if (SHOTS) await page.screenshot({ path: `${SHOTS}/shot-goal.png`, fullPage: true })
-await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-if (SHOTS) await page.screenshot({ path: `${SHOTS}/shot-today.png`, fullPage: true })
-await page.goto(`${BASE}/star`, { waitUntil: 'networkidle' })
-if (SHOTS) await page.screenshot({ path: `${SHOTS}/shot-star.png`, fullPage: true })
+if (SHOTS) {
+  for (const [name, path] of [
+    ['today', '/'],
+    ['todos', '/todos'],
+    ['star', '/star'],
+    ['area', '/areas/1'],
+    ['habit', '/tasks/101'],
+  ]) {
+    await page.goto(`${BASE}${path}`, { waitUntil: 'networkidle' })
+    await page.screenshot({ path: `${SHOTS}/shot-${name}.png`, fullPage: true })
+  }
+}
 
 await browser.close()
 server.close()

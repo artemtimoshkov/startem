@@ -16,6 +16,17 @@ export interface MetaRow {
   value: unknown
 }
 
+/**
+ * Ids are `deviceKey * 2^20 + counter` — see `newId` below for why. The
+ * constants sit above the class because the v3 upgrade mints ids too, and it
+ * has to do it through its own transaction.
+ */
+const DEVICE_KEY_BITS = 20
+const COUNTER_SPACE = 2 ** 20
+
+export const DEVICE_KEY_META = 'device_key'
+const COUNTER_META = 'id_counter'
+
 export class StartemDB extends Dexie {
   areas!: Table<Area, number>
   goals!: Table<Goal, number>
@@ -86,6 +97,97 @@ export class StartemDB extends Dexie {
             delete row['importance']
           })
       })
+
+    /**
+     * v3 — the goal stops owning the work (§3).
+     *
+     * Areas hold habits directly, a goal becomes an aim with a status of its
+     * own, and a pause moves from the goal down onto the habit it actually
+     * pauses. Three things have to happen here rather than later:
+     *
+     * - a task keeps the area it was scoring against, taken from its goal when
+     *   its own column never got one;
+     * - `frozen` is not a goal state any more, so a frozen goal comes back as
+     *   active — but its **pause periods survive**, re-pointed at each task
+     *   that hung off it. Dropping them would back-fill every dormant week
+     *   with misses, which is exactly what a period, rather than a flag, was
+     *   introduced to prevent (§3);
+     * - one goal-level period becomes N task-level ones, so N−1 need ids
+     *   nothing else holds. They are minted from the same device-partitioned
+     *   counter as everything else, read through `tx` so the whole upgrade
+     *   stays inside one transaction.
+     */
+    this.version(3)
+      .stores({
+        areas: 'id, position',
+        goals: 'id, area_id, status, deleted',
+        subgoals: 'id, area_id, archived, deleted',
+        checkins: '[subgoal_id+date], subgoal_id, date',
+        freezes: 'id, subgoal_id',
+        meta: 'key',
+      })
+      .upgrade(async (tx) => {
+        const goals = await tx.table('goals').toArray()
+        const areaOfGoal = new Map<number, number>(
+          goals.map((g: Record<string, unknown>) => [
+            g['id'] as number,
+            g['area_id'] as number,
+          ]),
+        )
+
+        const tasksByGoal = new Map<number, number[]>()
+        await tx
+          .table('subgoals')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            const goalId = row['goal_id'] as number | null | undefined
+            if (goalId != null) {
+              const bucket = tasksByGoal.get(goalId)
+              if (bucket) bucket.push(row['id'] as number)
+              else tasksByGoal.set(goalId, [row['id'] as number])
+            }
+            if (!row['area_id'] && goalId != null) {
+              row['area_id'] = areaOfGoal.get(goalId) ?? 0
+            }
+            delete row['goal_id']
+          })
+
+        // Freezes first, while the goal rows still say which were frozen.
+        const freezes = (await tx.table('freezes').toArray()) as Record<string, unknown>[]
+        const keyRow = await tx.table('meta').get(DEVICE_KEY_META)
+        const deviceKey = typeof keyRow?.value === 'number' ? keyRow.value : 1
+        const counterRow = await tx.table('meta').get(COUNTER_META)
+        let counter = typeof counterRow?.value === 'number' ? counterRow.value : 0
+
+        for (const period of freezes) {
+          if (period['subgoal_id'] != null) continue // already task-level
+          const targets = tasksByGoal.get(period['goal_id'] as number) ?? []
+          await tx.table('freezes').delete(period['id'] as number)
+          for (const [i, subgoalId] of targets.entries()) {
+            const { goal_id: _dropped, ...rest } = period
+            await tx.table('freezes').put({
+              ...rest,
+              // The first period keeps the id it already has, so a device that
+              // synced it once does not see it as a new row (§10).
+              id: i === 0 ? (period['id'] as number) : deviceKey * COUNTER_SPACE + ++counter,
+              subgoal_id: subgoalId,
+            })
+          }
+        }
+        await tx.table('meta').put({ key: COUNTER_META, value: counter })
+
+        await tx
+          .table('goals')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            // `frozen` is not a goal state any more. The periods it stood for
+            // have just been moved onto the tasks, so the goal itself is
+            // simply active again.
+            if (row['status'] !== 'achieved') row['status'] = 'active'
+            row['position'] = row['position'] ?? 0
+            row['achieved_on'] = row['status'] === 'achieved' ? (row['achieved_on'] ?? null) : null
+          })
+      })
   }
 }
 
@@ -112,12 +214,6 @@ export class StartemDB extends Dexie {
  * The low 20 bits allow ~1M rows per device. The whole id stays under 2^40, so
  * it is exact in a JS number and fits a Postgres `bigint` (§3).
  */
-const DEVICE_KEY_BITS = 20
-const COUNTER_SPACE = 2 ** 20
-
-export const DEVICE_KEY_META = 'device_key'
-const COUNTER_META = 'id_counter'
-
 async function deviceKey(): Promise<number> {
   const row = await db.meta.get(DEVICE_KEY_META)
   if (typeof row?.value === 'number' && row.value >= 1) return row.value

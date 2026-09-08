@@ -1,4 +1,4 @@
-# Startem Build Spec — v2.5, 27 August 2026
+# Startem Build Spec — v3.0, 8 September 2026
 
 Everything needed to rebuild the app from nothing: every field, every scheduling rule, the scoring maths, the mistakes already paid for once — and the decided stack it ships on.
 
@@ -8,21 +8,47 @@ Canonical styled copy: https://claude.ai/code/artifact/0ca4ef8a-35f0-40d4-ba83-0
 
 ## 1. What the app is
 
-A personal goal tracker built on one idea: life splits into a handful of **areas**, and each area is only as healthy as the habits you actually keep in it.
+A personal habit tracker built on one idea: life splits into a handful of **areas**, and each area is only as healthy as the habits you actually keep in it.
 
-The structure is three levels deep:
+The structure is **two levels**, not three:
 
 | Level | What it is | Example |
 |---|---|---|
-| **Area** | A vertex on the radar chart. Fixed set, renameable. | Health |
-| **Goal** | An ambition. A heading, optional, never directly checked off. | Reach 100 kg bench press |
-| **Task** | A thing you do, once or on a repeat. This is what gets ticked. | Gym session, every week on Mon/Wed/Sat |
+| **Area** | A vertex on the radar chart. Added, renamed, reordered and removed by the user. | Health |
+| **Habit** | A repeating task, hanging straight off its area. This is what gets ticked, and the only thing scored. | Wake up at 7 am, every day |
 
-Completing tasks, weighted by each task's own priority, is the only thing that moves an area's score. Goals themselves are never "done" — they are directions, not tasks.
+Beside the habits, an area also holds a list of **goals** — and a goal is an *aim*, not a container:
 
-> **A goal is a heading, not a weight.** Priority lives on the task. Two tasks under one goal are rarely equally urgent, and a goal-level importance forced them to be. It also follows that a goal is **optional**: a task belongs to an area outright, and can sit straight in Health without a goal invented to hang it on. Goals are created in one place only — the area screen — while tasks are created from the composer, which can attach one to a goal, to an area alone, or make a new goal on the spot.
+| | Goal | Habit |
+|---|---|---|
+| What it is | Where you are trying to get to | What you do about it |
+| Example | "Reach 100 kg bench press" | "Gym session, Mon / Wed / Sat" |
+| Owns tasks | No | — |
+| Has a cadence | No | Yes |
+| Moves the score | **Never** | It *is* the score |
+| Where you see it | The area screen | The day's list, every morning |
 
-Two views: the **star** (where you stand now) and a **day-by-day grid** (what actually happened, and a way to fix a day you forgot to log).
+> **A goal owns nothing.** In v2 a task hung off a goal which hung off an area, so adding "wake up at 7 am" to Health meant first inventing a goal to put it under. That tier is gone. A habit belongs to an **area**, full stop; a goal is a line you write down on the area screen and tick when you get there. The two are read in different places on purpose: the day's list is nothing but habits, and the aims are there when you go looking for them.
+
+### Habits and to-dos
+
+The other thing an area holds is the odd **to-do** — a one-time task, kept here because this is where you already are:
+
+| | Habit | To-do |
+|---|---|---|
+| Stored as | any repeating `cadence_type` | `cadence_type: 'once'` |
+| Where it lives | the Today tab | the To-dos tab |
+| Counts towards the star | **Yes** | **No** |
+| Has a streak, a rate, a tracker grid | Yes | No |
+| Can be paused | Yes | No |
+
+> **To-dos are tracked, never scored.** The star is a statement about how well you are keeping your habits. An errand jotted down and dropped is not evidence about that, and letting it drag Health down made the number mean something no one wanted. The one place the two lists touch is the day screen, which surfaces a to-do that is due today or already late — under its own heading, and never in the day's count.
+
+> **There is no `kind` column, and there must not be one.** Habit or to-do is read off `cadence_type`, which is already load-bearing for scheduling. A second field saying the same thing is a field that can disagree with the one the cadence rules actually walk.
+
+Completing habits, weighted by each habit's own priority, is the only thing that moves an area's score.
+
+Three screens: **Today** (the habits due, ticked as you go), **To-dos** (the errands, in deadline piles) and the **star** (where you stand, and where the areas themselves are edited).
 
 It runs in two places off one codebase: **installed on the iPhone home screen** as an offline-first web app, and **signed in on the web** at a subdomain. Both are the same deployed site; the phone install simply keeps its own copy of the data and syncs it.
 
@@ -66,10 +92,12 @@ Five tables. Field names below are the storage names — the same shapes work in
 | Field | Type | Notes |
 |---|---|---|
 | id | bigint, pk | — |
-| name | text | Renameable by the user. |
-| position | int | Order around the chart, clockwise from the top. |
+| name | text | The user's, from the first run onwards. |
+| position | int | Order around the chart, clockwise from the top. Compacted on every removal, so the ring never has a gap. |
 
-Default set of ten: Health, Hobbies, Work, Business, Friends, Family, Purpose, Money, Relationship, Other. The chart adapts to any count — it divides 360° by however many there are.
+A fresh install starts on ten: Health, Hobbies, Work, Business, Friends, Family, Purpose, Money, Relationship, Other. **They are the user's from then on** — added, renamed, reordered and removed from the star's edit mode (§7). The chart adapts to any count, because its geometry is `360° / count` and nothing anywhere assumes ten. One is the floor (a star with no spokes has nothing to draw); twenty is the ceiling, which is where the labels around the rim stop being readable on a phone.
+
+> **Removing an area archives its habits; it does not delete them.** Their check-ins still describe real days, which is the same rule that governs retiring a single habit. Its goals *are* tombstoned — an aim with nowhere to live is a stray row.
 
 ### goals
 
@@ -79,31 +107,34 @@ Default set of ten: Health, Hobbies, Work, Business, Friends, Family, Purpose, M
 | area_id | bigint, fk | → areas.id |
 | title | text | — |
 | description | text | Optional. Free text — used for definitions of done, prompts. |
-| status | enum | `active` / `frozen` — frozen goals leave scoring entirely, taking their tasks with them. |
-| created_at | date | Nothing is scheduled before this date. |
+| status | enum | `active` / `achieved` |
+| position | int | Order inside its area. |
+| achieved_on | date, null | The day it was reached. Set when `status` becomes `achieved`, **cleared** when it is reopened. |
+| created_at | date | — |
 
-A goal carries **no importance**: it groups tasks inside an area and can be frozen, and that is all it does. Deleting one tombstones the heading and **detaches** its tasks to the area they were already scoring against — it never destroys the work underneath.
+A goal carries **no importance**, **no tasks** and **no percentage**. It is a sentence you are aiming at. Deleting one tombstones it and moves nothing else: it held none of the work in the first place.
+
+> **`frozen` is not a goal status any more.** Freezing was how you took a whole line of work out of scoring, and it only worked because the goal owned the tasks. It now lives where the work does — see `freezes` below.
 
 ### subgoals — the tasks
 
-Stored as `subgoals` for continuity with the original schema; everywhere else they are called tasks.
+Stored as `subgoals` for continuity with the original schema; everywhere else they are called tasks — a **habit** when it repeats, a **to-do** when it does not.
 
 | Field | Type | Notes |
 |---|---|---|
 | id | bigint, pk | — |
-| area_id | bigint, fk | → areas.id. **Required** — every task scores against exactly one area. |
-| goal_id | bigint, fk, null | → goals.id, or null for a task attached straight to its area. |
+| area_id | bigint, fk | → areas.id. **Required, and the only parent a task has.** |
 | title | text | — |
 | importance | enum | `high` / `medium` / `low`. Sets the weight of every occurrence. A row that arrives without one is repaired to `medium`; the composer opens a **new** task on `low` (P3) — see §7. |
-| cadence_type | enum | `daily` / `weekly` / `monthly` / `quarterly` / `once` |
+| cadence_type | enum | `daily` / `weekly` / `monthly` / `quarterly` / `once`. **`once` is the to-do; everything else is a habit.** |
 | interval | int | Every N units of the cadence. `1` for everything but a custom repeat. |
 | days | json int[] | Weekly only. Weekday numbers, e.g. `[0,2,5]`. Empty for other cadences. |
 | monthly_day | int, null | Monthly/quarterly, fixed-date mode. **Held to 1–28.** |
 | month_weekday | int, null | Monthly/quarterly, weekday mode. `0–6`. Non-null selects this mode. |
 | month_ordinal | int, null | `1–4`, or `-1` for last. Pairs with month_weekday. |
-| due_date | date, null | One-time only. Optional — a one-time task can have no deadline. |
-| start_date | date, null | Recurring only: the first day it can come due, and the interval's anchor. |
-| repeat_until | date, null | Recurring only: the last day it can come due. **Inclusive.** |
+| due_date | date, null | To-dos only. Optional — a to-do can have no deadline at all. |
+| start_date | date, null | Habits only: the first day it can come due, and the interval's anchor. |
+| repeat_until | date, null | Habits only: the last day it can come due. **Inclusive.** |
 | time | time, null | Optional `HH:MM` local wall-clock time. Display only — scoring is per day (§2). |
 | weight | int, null | Overrides the importance weight for this task alone. |
 | created_at | date | Nothing is scheduled before this date. |
@@ -123,23 +154,25 @@ Stored as `subgoals` for continuity with the original schema; everywhere else th
 
 **No row means unresolved**, which is different from missed. A past day with no row is a miss; today with no row is still pending. `skipped` is the user saying "not doing this today" — an explicit, immediate miss.
 
-### freezes
+### freezes — pausing one habit
 
 | Field | Type | Notes |
 |---|---|---|
 | id | bigint, pk | — |
-| goal_id | bigint, fk | → goals.id |
+| subgoal_id | bigint, fk | → subgoals.id. A **habit**, not a goal. |
 | start_date | date | — |
-| end_date | date, null | Null means still frozen. |
+| end_date | date, null | Null means still paused. |
 
-> **Why freezes are periods, not a flag:** `goals.status` alone would tell you a goal is frozen *now*, but not that it was frozen last March. Without the periods, unfreezing a goal would retroactively fill its dormant weeks with misses. A date is frozen when a period covers it:
+> **Why a pause hangs off the habit.** It used to hang off the goal, because the goal owned the tasks and pausing it paused them all. A goal owns nothing now, so freezing one would pause nothing at all. "I am away for a fortnight, stop counting the gym" is a statement about the habit, and that is where the period belongs.
+
+> **Why pauses are periods, not a flag:** a flag would tell you a habit is paused *now*, but not that it was paused last March. Without the periods, resuming would retroactively fill its dormant weeks with misses. A date is paused when a period covers it:
 >
 > ```
-> frozen(date) = any period where
+> paused(date) = any period where
 >   start_date <= date AND (end_date IS NULL OR date < end_date)
 > ```
 >
-> Note the asymmetry — `end_date` is exclusive, so unfreezing makes that same day live again.
+> Note the asymmetry — `end_date` is exclusive, so resuming makes that same day live again.
 
 For sync, every row in every table additionally carries `updated_at` (timestamp) and `deleted` (bool tombstone) — see §10. They are sync plumbing, invisible to all the logic above.
 
@@ -153,7 +186,7 @@ isScheduled(task, date):
   if task.created_at > date              -> false   // did not exist yet
   if task.start_date > date              -> false   // has not started
   if task.repeat_until < date            -> false   // inclusive end
-  if frozen(date, goal's periods)        -> false   // no goal, no periods
+  if paused(date, the habit's periods)   -> false   // its own, and no one else's
   if not onIntervalStep(task, date)      -> false
 
   daily     -> true
@@ -207,29 +240,37 @@ The composer offers a short list of repeats plus a custom builder. Each one is o
 
 The single date field means two different things depending on the repeat, and the composer is the one place that decides which: with no repeat it is the **deadline**, with one it is the **start**. Moving the date moves what a preset repeat means — dragging a weekly task from Sunday to Thursday makes it every Thursday, because a repeat on a day the task no longer has is a repeat nobody asked for. A custom repeat is left alone: its interval and day set were set by hand.
 
-### One-time tasks
+### To-dos
 
-They never recur — `isScheduled` is false for them on every date. A one-time task is a win once completed, a standing miss once its deadline passes, and simply not yet owed before then. With no `due_date` it sits in the list indefinitely until done, and never counts against anything.
+A to-do never recurs — `isScheduled` is false for it on every date. It is one thing, done once, and it is **not scored at all** (§5): ticking it moves nothing on the star, and blowing its deadline drags nothing down. With no `due_date` it sits on the list indefinitely until done.
 
-They do still score, though, so ticking one moves the calendar and the star. Since they have no cadence to walk, each gets **exactly one occurrence, on one effective date**:
+It still needs a date to be *displayed* against, though — the to-do list sorts into five piles from the deadline alone, and the piles are recomputed on every read rather than filed into:
+
+| Pile | Rule |
+|---|---|
+| Overdue | open, `due_date < today` |
+| Today | open, `due_date == today` |
+| Upcoming | open, `due_date > today` |
+| No date | open, `due_date` is null |
+| Finished | resolved within the last **14 days**, then it drops off on its own |
+
+Since a to-do has no cadence to walk, its history is still one occurrence on one effective date — the day it was actually logged. That is what the finished pile sorts on, and what the day-detail checklist reads:
 
 ```
 onceOccurrence(action, today):
   if logged (a check-in exists)   -> { date: the check-in's date, resolved }
   if due_date != null AND due_date < today
-                                  -> { date: due_date, unresolved }   // standing miss
-  otherwise                       -> none    // due today is pending; no deadline never counts
+                                  -> { date: due_date, unresolved }
+  otherwise                       -> none
 ```
 
-Credit lands on the day the work actually happened rather than on the deadline, because that is the day the calendar is a record of. The occurrence is then windowed like every other one, so a win ages out of the star after 28 days instead of propping it up forever — and an overdue one stops dragging after 28 days too, while remaining in the todo list until it is done or archived.
-
-> **Why the effective date and not the deadline:** a one-time task with no `due_date` has no other date to attach to, and the spec still wants it to count as a win once done. Keying the occurrence to the check-in covers both cases with one rule.
-
-
+> **Why the piles are derived, not stored.** A to-do moves from Upcoming to Today to Overdue overnight, on its own, with nothing to tidy and nothing that can go stale. Storing the pile would mean a nightly job the app does not have and cannot run offline.
 
 ## 5. Scoring
 
-The model is a **weighted pool of occurrences**. Every time a task comes due it is worth its weight. An area's score is the weight completed over the weight that came due.
+The model is a **weighted pool of occurrences**. Every time a habit comes due it is worth its weight. An area's score is the weight completed over the weight that came due.
+
+> **Only habits are scored.** To-dos are excluded from every tally: the area score, the star, the weekly strip, the calendar bands and the day detail all walk the habits alone (§1). The star is a statement about how well the habits are being kept, and nothing else may move it.
 
 ### Weights
 
@@ -239,7 +280,7 @@ The model is a **weighted pool of occurrences**. Every time a task comes due it 
 | medium | 2 | The repair value for a row that arrives with no priority at all. |
 | low | 1 | **What a new task opens on** (§7). |
 
-A task's weight comes from **its own** priority, unless `subgoals.weight` overrides it with an explicit number. Priority is not inherited from a goal — there may not be one.
+A habit's weight comes from **its own** priority, unless `subgoals.weight` overrides it with an explicit number. Nothing is inherited: a habit hangs off an area, and an area has no priority.
 
 > **Frequency multiplies weight:** A daily low task generates 7 × 1 = 7 per week; a weekly high task generates 1 × 4 = 4. The daily trivial habit outweighs the weekly critical one. That is deliberate — it measures total weighted effort delivered — but it is the first thing to revisit if the scores ever feel wrong. Widening the spread (say 10/3/1) shifts the balance toward importance over frequency.
 
@@ -257,7 +298,7 @@ Over 28 days every weekday falls *exactly* four times. Over 30 days, two weekday
 
 So `skipped` and a past unlogged day behave identically in the maths — both are misses. The difference is only that crossing out registers immediately rather than waiting for midnight.
 
-One-time tasks have no days to walk, so their single occurrence (§4) is counted directly: it contributes if its effective date falls inside the range being scored.
+To-dos are not walked at all — they are filtered out before any tally begins (§1). `tallyRange` and `tallyStanding` still handle a `once` task correctly as pure functions, because the day-detail checklist and the finished pile read them; nothing that produces a *score* ever passes one in.
 
 ### Rare cadences need two different readings
 
@@ -265,10 +306,10 @@ A 28-day window can miss a monthly task's date entirely (a 28-day span inside a 
 
 | Mode | Rule | Used by |
 |---|---|---|
-| standing | The task's *most recent* due instance represents it, found by scanning back day by day until the first hit. An unresolved **today** is skipped and the scan continues, so last month's result stands in until today is logged rather than the task dropping out for a day. | The star, goal percentages |
+| standing | The habit's *most recent* due instance represents it, found by scanning back day by day until the first hit. An unresolved **today** is skipped and the scan continues, so last month's result stands in until today is logged rather than the habit dropping out for a day. | The star, area and habit percentages |
 | range | Only what genuinely came due inside the range. | Weekly history, calendar days |
 
-Which reading a task gets is decided by its **period** — roughly how many days sit between two occurrences (`interval` for daily, `interval × 7` for weekly, `interval × 31` for monthly, 97 for quarterly, and nothing for a one-time task). A period that fits inside 28 days reads the plain window; anything longer scans. So weekly tasks and one-time ones read the window as they always did, while a custom "every 8 weeks" scans like a monthly one rather than falling out of the score entirely.
+Which reading a habit gets is decided by its **period** — roughly how many days sit between two occurrences (`interval` for daily, `interval × 7` for weekly, `interval × 31` for monthly, 97 for quarterly). A period that fits inside 28 days reads the plain window; anything longer scans. So weekly habits read the window as they always did, while a custom "every 8 weeks" scans like a monthly one rather than falling out of the score entirely.
 
 Look-backs for standing mode: **45 days** monthly, **115 days** quarterly, and for a long custom repeat two whole periods. Consecutive "last Sunday" dates can sit 35 days apart and quarterly ones about 97, so the reach must exceed that comfortably. Scanning further is harmless — the scan stops at the first match, which is by definition the latest one.
 
@@ -281,31 +322,47 @@ score = round((1 + rate * 9) * 10) / 10
 
 So 0% → **1.0** and 100% → **10.0**. The floor is 1 because a 1–10 chart cannot draw a zero-length spoke. When `available` is 0 the score is **null**, rendered as an em dash — an area with nothing scheduled has no opinion, which is different from scoring badly.
 
-### Three levels of percentage
+### Two levels of percentage
 
 | Shown on | Computed as |
 |---|---|
-| Area (the chart) | Weighted pool across every *live* task in the area, standing mode, 28 days — including tasks with no goal above them. |
-| Goal (card header) | Same pool, restricted to the tasks under that one goal. |
-| Task (next to it) | *Unweighted* — occurrences done ÷ occurrences resolved. Weight is irrelevant when comparing a task to itself. |
+| Area (the chart) | Weighted pool across every live **habit** in the area, standing mode, 28 days. |
+| Habit (next to it) | *Unweighted* — occurrences done ÷ occurrences resolved. Weight is irrelevant when comparing a habit to itself. |
 
-### Frozen goals
+There is deliberately **no goal percentage**. A goal owns no tasks (§1), so any number attached to one would have to be invented out of habits it does not hold.
 
-Excluded from every score, absent from the todo list along with every task under them, and their frozen days never count as misses. History is preserved and unfreezing restores everything. Freezing is a goal-level idea, so a task attached straight to an area has nothing that can freeze it. An area whose goals are *all* frozen still scores whatever its goal-less tasks earn; with none of those it scores null, not zero.
+### Streaks
+
+The one number that makes a habit feel like a habit: consecutive kept occurrences, counting back from the last day it came due.
+
+- **Today does not break a streak.** An unticked today is pending, not failed (§5), so the walk steps over it and carries on.
+- **Paused days do not break a streak** either — that is the whole point of a pause.
+- It counts *occurrences*, not days: three kept Wednesdays in a row is a streak of three.
+- It is displayed from the second one. One kept day is not a run of anything.
+
+### Paused habits
+
+A paused habit is excluded from every score and absent from the day's list, and its paused days count as neither kept nor missed. History is preserved and resuming restores everything. An area whose habits are *all* paused scores null, not zero.
 
 ## 6. The derived views
 
 All of them are pure functions of the stored rows plus today's date. None of them needs storing.
 
-Three of the five are **built but not surfaced** as of v2.5 — the weekly strip, the per-goal grid and the day-by-day calendar. Their builders and tests stay in `src/core` untouched, because the rules below are the expensive part and none of them changed; what was removed is the screens that drew them. Anything reading this to rebuild the app should treat those three as specified and shelved, not as deleted.
+Two of them are **built but not surfaced** as of v3.0 — the weekly strip is drawn on the area screen but nowhere else, and the day-by-day calendar has no screen at all. Their builders and tests stay in `src/core` untouched, because the rules below are the expensive part and none of them changed; what was removed is the screens that drew them. Anything reading this to rebuild the app should treat those as specified and shelved, not as deleted.
 
-### The task list
+### The day's list — habits only
 
-Every live task due today, **sorted heaviest first** so the day's most important work is at the top. Grouped by area in the order the groups first appear, which follows from the sort. A task with no goal is named by its area instead.
+Every live **habit** due today, **sorted heaviest first** so the day's most important work is at the top. Grouped by area in the order the groups first appear, which follows from the sort. Progress reads `done of (total − crossed out)`, so crossing something out removes it from the target rather than making the day unwinnable.
 
-One-time tasks are the exception: they appear while pending regardless of date, plus on the day they were completed. Progress reads `done of (total − crossed out)`, so crossing something out removes it from the target rather than making the day unwinnable.
+A to-do is **never** in this list, pending or done (§1). The screen carries one red affordance — **Add habit**, which opens the composer in place, on Habit (§7) — and below the day's groups sits a collapsed **Not due today** list of every other habit that exists. Without it, a habit set to "every Monday" and added on a Wednesday would vanish the instant it was saved, since the day's list is the only list.
 
-The screen is called **Tasks**, not Today, and it carries the one red affordance in the app: **Add task**, which opens the composer in place (§7). Below the day's groups sits a collapsed **Not due today** list of everything else that exists — without it, a task set to "every Monday" and added on a Wednesday would vanish the instant it was saved, since the day's list is the only list.
+Under all of that, and only when there is something to show, sits a separate **To-dos** block: the open to-dos that are due today or already overdue, with a way through to the full list. It is the one place the two lists touch, it is visibly its own section, and it never touches the day's count.
+
+### The to-do list
+
+Every to-do, in the five piles of §4, with the piles derived from the deadline on every read. Inside a pile: soonest deadline first, then heaviest, then oldest — except the finished pile, which reads most recently finished first. A habit is never in this list.
+
+The to-do tab carries a **badge with the overdue count**, because that tab is the only place a deadline is visible and a silent one would be missed.
 
 ### The star
 
@@ -316,33 +373,44 @@ angle(i) = -90° + (360° / count) * i
 radius(i) = R * score(i) / 10
 ```
 
-### Weekly history strip — *shelved, not surfaced*
+The count is whatever the user has left it at (§3, §7) — the geometry is derived from it, so adding or removing a spoke simply redraws the chart. It must hold at one spoke and at twenty, not only at ten.
 
-`buildWeeklyStrip` still computes it. **8** calendar weeks, Monday-start, one bar per week, using *range* mode. The current week is scored on the days resolved so far. Weeks with nothing due render flat rather than empty, so a gap is visibly different from a zero.
+### The area screen
 
-### Per-goal tracker grid — *shelved, not surfaced*
+The one screen where goals are read, and the order on it is the argument the redesign rests on:
 
-`buildGoalGrid` still computes it. **15** weeks of day cells for a single goal. Cell states:
+1. the area's score and its eight-week strip;
+2. **"What are you aiming for?"** — the goals, active first, reached below, each written and retired inline;
+3. **Habits** — every habit in the area with its cadence, its rate and its streak;
+4. the open to-dos parked in this area, last and unscored.
+
+### Weekly history strip
+
+`buildWeeklyStrip` computes it, and the area screen draws it. **8** calendar weeks, Monday-start, one bar per week, using *range* mode, habits only. The current week is scored on the days resolved so far. Weeks with nothing due render as a hairline rather than a zero, so a gap is visibly different from a failure. Passing an `areaId` narrows it to one area.
+
+### Per-habit tracker grid
+
+`buildHabitGrid` computes it, and the habit screen draws it. **15** weeks of day cells for a **single habit**, weeks running down the columns so the whole span fits a phone's width without scrolling. Cell states:
 
 | State | When |
 |---|---|
-| done | Every task due that day was completed. |
-| partial | Some but not all, and the day is past. |
-| missed | Something was due, none of it done, day is past. |
-| today | Today, with anything still unresolved. |
+| done | The habit was kept that day. |
+| partial | Unreachable for a single habit; kept for the shape's sake. |
+| missed | It was due, it was not done, the day is past. |
+| today | Today, still unresolved. |
 | none | Nothing was due. |
-| frozen | The goal was frozen that day. |
+| frozen | The habit was paused that day. |
 | future | Hasn't happened. |
+
+> **The grid used to hang off a goal**, where it averaged unrelated work into one colour and a half-shaded cell told you nothing about what you had actually failed to do. The habit is the thing with a cadence, so it is the only thing whose day cells can mean "kept" or "missed".
 
 ### Day-by-day calendar — *shelved, not surfaced*
 
-`buildCalendar`, `buildDayDetail` and `canEditDay` still compute it, and the `/calendar` route and its tab are gone. **26** weeks across every live task, Monday-aligned columns, ending with the week containing today. Each day carries weighted totals: `total`, `done`, `skipped`, `count`, `doneCount`, `ratio`. Colour runs in five bands from "nothing logged" through to "everything logged".
-
-Hovering a day shows tasks completed and the weighted amount. Clicking opens that day as an editable checklist.
+`buildCalendar`, `buildDayDetail` and `canEditDay` still compute it; there is no `/calendar` route. **26** weeks across every live habit, Monday-aligned columns, ending with the week containing today. Each day carries weighted totals: `total`, `done`, `skipped`, `count`, `doneCount`, `ratio`. Colour runs in five bands from "nothing logged" through to "everything logged".
 
 > **One deliberate inconsistency:** A day cell's `ratio` counts *all* weight due, including today's unresolved items — so today reads as progress so far. The star excludes unresolved items instead. Both are right for their purpose: a calendar is a record of a day, the star is a judgement about a standing. Don't "fix" one to match the other.
 
-The day detail view includes pending items — it's a checklist, so it must show what was owed as well as what was logged. For **today** it also includes pending one-time tasks so it matches the task list exactly; for a **past** day it does not, because a task due next week was not owed back then — with one exception: a one-time task whose own occurrence lands on that day (it was logged then, or that day was the deadline it blew past) *was* owed then, and shows.
+The day detail view includes pending items — it's a checklist, so it must show what was owed as well as what was logged — and an item **logged** that day even if the cadence has since moved off it, because the row describes a real day. Like every other score-shaped view, it walks habits alone.
 
 ## 7. What the user can do
 
@@ -350,17 +418,22 @@ The day detail view includes pending items — it's a checklist, so it must show
 |---|---|
 | Tick an item | Writes `done`. Ticking again clears the row back to unresolved. |
 | Cross out an item | Writes `skipped` — an immediate miss. Reversible; restoring returns it to pending. |
-| Back-date | **No surface as of v2.5** — the day screen was the only one, and it went with the calendar. The rule it enforced still stands in `canEditDay` for whatever brings it back: any day within **182 days** (26 weeks) is correctable, and a future day never is. |
-| Freeze / unfreeze a goal | Opens or closes a freeze period, and flips `status`. |
-| Add a task | The composer: a line to type into, and chips for **where** (area, and a goal inside it or none), **when** (date → calendar, shortcuts, time, repeat) and **priority**. Typing `p1` / `p2` / `p3` sets the priority and leaves the title. |
+| Back-date | **No surface as of v3.0** — the day screen was the only one, and it went with the calendar. The rule it enforced still stands in `canEditDay` for whatever brings it back: any day within **182 days** (26 weeks) is correctable, and a future day never is. |
+| Pause / resume a habit | Opens or closes a pause period on **that habit** (§3). One switch, on the habit screen. |
+| Add a task | The composer: a **Habit / To-do switch**, a line to type into, and chips for **which area**, **when** (date → calendar, shortcuts, time, repeat) and **priority**. Typing `p1` / `p2` / `p3` sets the priority and leaves the title. |
+| Habit or to-do | One switch at the top of the composer, and it writes **nothing but the repeat** — the distinction *is* the repeat (§3). Turning a to-do into a habit with no repeat set gives it **every day**; turning a habit into a to-do clears it and keeps the date as the deadline. The composer opens on **Habit** everywhere except the to-do screen, because this is a habit tracker and the common case should cost no taps. |
 | Priority of a new task | Opens on **P3 / low** (weight 1), not the middle of the scale. Most of what gets typed in is ordinary, and defaulting to P2 quietly counted every routine task double a genuinely small one until it was corrected by hand. Starting at the floor makes *raising* the priority the deliberate act. Editing an existing task still opens on whatever it already carries. |
 | Pick a date | The date sheet offers **Today**, **Tomorrow**, **This weekend** (the coming Saturday, or today when today is a Saturday or a Sunday) and **No date**, then a month grid. Picking a day **does not close the sheet** — it turns that day red and leaves Time and Repeat, which live in the same sheet's footer, one tap away. The sheet closes on the backdrop, the ✕ or Escape. |
-| Pick a repeat | The repeat sheet opens from the date sheet's footer and lists the presets. Picking one **is** the whole answer — "every day" or "every week on Monday" says when the task lands without a day out of the calendar as well — so it commits and **closes the pickers outright**, unlike picking a date. **Back**, bottom-left in the footer and in thumb reach on a phone, returns to the date sheet; the ✕, the backdrop and Escape close the stack. **Custom…** opens a sub-sheet with the same bottom-left Back, and its Save commits and closes the same way. |
-| Edit a task | The same composer, opened on the task. There is no second form to keep in step with the first. |
+| Pick a repeat | The repeat sheet opens from the date sheet's footer and lists the presets. Picking one **is** the whole answer — "every day" or "every week on Monday" says when the habit lands without a day out of the calendar as well — so it commits and **closes the pickers outright**, unlike picking a date. **Back**, bottom-left in the footer and in thumb reach on a phone, returns to the date sheet; the ✕, the backdrop and Escape close the stack. **Custom…** opens a sub-sheet with the same bottom-left Back, and its Save commits and closes the same way. |
+| Edit a task | The same composer, opened on the task from its own screen. There is no second form to keep in step with the first. |
 | Archive a task | Removes it from the interface; the row and its check-ins stay. |
-| Create / edit a goal | Title, area, description. Goals are created from the **area screen**, or on the spot from the composer's area picker — never as a side effect of adding a task. |
-| Delete a goal | Tombstones the heading and its freeze periods, and detaches its tasks to the area. Confirm inline — never with a browser dialog. |
-| Rename an area | **No surface as of v2.6** — the settings screen was the only one, and it went with the JSON import/export. `renameArea` still stands in the store, and tested, for whatever brings it back: name only, a blank name refused, and areas still never created or destroyed. |
+| Write a goal | One line on the **area screen**, under "What are you aiming for?". A goal has no screen of its own, because there is nothing to put on one. |
+| Reach a goal | One tap on its tick: `status` becomes `achieved` and `achieved_on` is set to today. Reopening it clears that date — a goal put back in play must not still claim it was reached in March. |
+| Edit / remove a goal | Tap it to expand: title, description, and Remove. Removing tombstones it and moves nothing else. Confirm inline — never with a browser dialog. |
+| Add an area | **Edit** on the star, then a name. It lands at the end of the ring and the chart redraws around it. Ceiling of **20**. |
+| Rename an area | The same edit mode, in place. Committed on blur rather than on every keystroke: each write re-reads the whole store and rebuilds the star, and a name is not worth doing that once per letter. A blank name is refused. |
+| Reorder an area | Two arrows per row, not a drag. Dragging a list item on a touch screen needs either a library — every kilobyte of which is precached for offline use (§9) — or a hand-rolled gesture that fights the page scroll. Arrows always work, including for a keyboard and a screen reader. |
+| Remove an area | Tombstones it, **archives** its habits and tombstones its goals, then compacts the positions behind it so the ring has no gap. The confirmation says out loud what goes with it. The **last** area cannot be removed: a star with no spokes has nothing to draw. |
 | Sign in / out | Magic-link email sign-in. Signing out keeps local data on the device; signing in merges it up. See §10. |
 | Import / export JSON | **Removed in v2.6**, along with the settings screen that held it. `importSnapshot` survives as the sample dataset's loader and as the shape §11's one-off migration would arrive in; there is no export, and no screen. |
 
@@ -384,12 +457,17 @@ Restrained, typographic, hairline-ruled. System font stack — on Apple hardware
 | --imp-high | #c8443a | Semantic priority colours, separate from the accent. |
 | --imp-medium | #cf8c22 | Priority reads as red / amber / green on the card stripe, |
 | --imp-low | #3a8f5c | the dot, the Today bar and the editor. |
+| --frozen | #b6bcc5 | A paused habit's stripe. |
+| --cell-done / --cell-missed | accent / rgba(200,68,58,.28) | The tracker grid's kept and missed cells. |
+
+The tracker grid is read as a **texture**, at a glance, so its kept cells are the accent and its missed ones a wash of the priority red — two saturated hues fighting at 12px reads as noise rather than as a pattern.
 
 Greys are all tinted slightly toward the accent so nothing reads as a stray warm neutral. Shadows carry the palette's hue rather than flat black. Radii step by depth: 16px containers, 12px default, 8px inner elements.
 
 ### Non-negotiables
 
-- **Frozen goals show a neutral grey stripe**, not their priority colour — advertising urgency for something excluded from scoring is a lie.
+- **Paused habits show a neutral grey stripe**, not their priority colour — advertising urgency for something excluded from scoring is a lie.
+- **A streak is shown from the second one.** One kept day is not a run of anything, and a flame beside a zero congratulates you on nothing.
 - **Tabular figures** on every number that sits in a column with another number.
 - **A visible focus ring** on everything interactive, and real `aria-label`s on icon-only buttons. The chart needs a text description; it is the main data display.
 - **No browser dialogs.** Confirmation happens inline.
@@ -455,7 +533,9 @@ The same five tables in Supabase Postgres, each with three extra columns:
 
 Check-ins are unique on `(user_id, subgoal_id, date)` — the same natural key as locally, so two devices editing the same day *upsert into one row* and converge instead of duplicating. "Untick" is not a row deletion on the wire: it writes the tombstone, which is what lets the clearing propagate to the other device.
 
-Day-type columns (`date`, `created_at` on goals/subgoals, `start_date` / `repeat_until`, freeze bounds) are Postgres `date`, never `timestamptz` — the §2 convention survives the round trip untouched. `subgoals.time` is a bare Postgres `time`, for the same reason: 07:30 means half seven wherever the phone is, not an instant that moves when it crosses a border.
+`freezes.subgoal_id` points at a subgoal, not at a goal (§3) — a schema written against v2 needs that foreign key moved before it will take a v3 device's rows.
+
+Day-type columns (`date`, `created_at` on goals/subgoals, `achieved_on`, `start_date` / `repeat_until`, pause bounds) are Postgres `date`, never `timestamptz` — the §2 convention survives the round trip untouched. `subgoals.time` is a bare Postgres `time`, for the same reason: 07:30 means half seven wherever the phone is, not an instant that moves when it crosses a border.
 
 ### Row-level security is the whole authorisation model
 
@@ -559,10 +639,15 @@ Each of these cost real debugging the first time — plus three known ones added
 | **Fixed monthly days above 28** | The task vanishes in short months with no error. Clamp on write *and* on read. |
 | **An SVG `apple-touch-icon`** | iOS ignores it entirely and shows a screenshot instead. It must be PNG. |
 | **Deleting a task on edit** | Orphans its check-ins and rewrites history. Archive instead. |
-| **Deleting a goal's tasks with it** | A goal is a heading; losing one must not delete the work under it. Detach the tasks to the area instead. |
+| **Deleting a goal's tasks with it** | A goal owns no tasks (§1); removing an aim must not touch a habit. |
+| **Deleting an area's habits with it** | Their check-ins describe real days. Archive them, exactly as for a single habit, and tombstone only the area and its goals. |
+| **Leaving a gap in `areas.position`** | The ring is drawn from the *order*, but a later insert lands on `last + 1`; a gap left by a removal eventually collides. Compact on every removal. |
+| **Scoring to-dos** | An errand jotted down and dropped drags an area's number below what its habits deserve, and the star stops meaning anything. Filter them out before any tally begins. |
+| **A `kind` column beside `cadence_type`** | Two fields saying habit-or-to-do can disagree, and the cadence fields are the ones the scheduling rules actually walk. Derive it. |
 | **Anchoring a repeat interval on "today"** | "Every 4 weeks" silently lands on different weeks tomorrow than it does today. Anchor on `start_date ?? created_at`. |
 | **A repeat whose end date precedes its start** | The task looks live in the editor and can never come due. Drop the end date at the storage boundary. |
-| **A frozen flag with no periods** | Unfreezing back-fills the dormant weeks with misses. |
+| **A paused flag with no periods** | Resuming back-fills the dormant weeks with misses. |
+| **Dropping a pause when it moves between tables** | The v2 → v3 upgrade re-points a goal's period onto every habit that hung off it. Losing one back-fills months of deliberate absence as failure — the exact outcome periods exist to prevent. |
 | **Serverless hosting plus a file database** | No persistent disk. The data disappears on every deploy, quietly. The new shape avoids this by construction: device + Supabase, nothing stored on Vercel. |
 | **A monorepo where the host installs only the root** | The build fails with `exit 127`, command not found. Avoided here by having one package, full stop. |
 | **Number inputs and the mouse wheel** | Scrolling over a focused number field silently changes its value, and `max` does not prevent it. Validate at the storage boundary. |
@@ -575,3 +660,11 @@ Each of these cost real debugging the first time — plus three known ones added
 **Migration:** Existing data moves across as JSON — the five tables dumped whole, loaded into the device store at milestone 2 with row ids preserved, because the tables reference each other by id. The first sync after login then seeds Supabase from the device, so the migration is one import, not two. Read the destination's column list when loading, so a dump taken before a schema change still loads. There is no import screen — `importSnapshot` is the whole surface, and `migration/sample-export.json` is the worked example of the shape.
 
 **Moving priority onto the task (v2.4):** an export or a device written before this carries `goals.importance` and no `subgoals.area_id`. Both the JSON importer and the IndexedDB upgrade hand each goal's importance *down* to its tasks and fill `area_id` from the goal, **before** dropping the column. Doing it in the other order would reset every task on the device to `medium` and silently re-weight the whole star.
+
+**Flattening the goal tier (v3.0):** an export or a device written before this carries `subgoals.goal_id`, `goals.status = 'frozen'` and `freezes.goal_id`. Three things happen on the way in, and each of them loses data if skipped:
+
+1. a task takes its `area_id` from the goal it hung off, when its own row never got one, **before** `goal_id` is dropped;
+2. one goal-level pause becomes **N task-level ones**, one per habit that hung off it. The first keeps the original id so a device that already synced it sees no churn (§10); the rest are minted from the same device-partitioned counter, inside the same transaction;
+3. only then does `frozen` become `active`, because the periods it stood for now live on the habits.
+
+Both paths are covered: `normaliseSnapshot` does it for a JSON dump arriving from anywhere, and the Dexie v3 upgrade does it for the store already on the phone. The upgrade is the one path that runs exactly once, offline, with no way to retry — `src/db/migrate.test.ts` builds a genuine v2 database through raw IndexedDB and opens Dexie on top of it, and the browser smoke test does the same again for real.

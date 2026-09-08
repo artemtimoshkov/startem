@@ -24,6 +24,8 @@ export function goal(over: Partial<Goal> = {}): Goal {
     title: 'Reach 100 kg bench press',
     description: '',
     status: 'active',
+    position: 0,
+    achieved_on: null,
     created_at: '2000-01-01',
     ...over,
   }
@@ -33,7 +35,6 @@ export function subgoal(over: Partial<Subgoal> = {}): Subgoal {
   return {
     id: 1,
     area_id: 1,
-    goal_id: 1,
     title: 'Gym session',
     importance: 'medium',
     cadence_type: 'weekly',
@@ -61,7 +62,7 @@ export function checkin(over: Partial<Checkin> & Pick<Checkin, 'date'>): Checkin
 }
 
 export function freeze(over: Partial<Freeze> & Pick<Freeze, 'start_date'>): Freeze {
-  return { id: 1, goal_id: 1, end_date: null, ...over }
+  return { id: 1, subgoal_id: 1, end_date: null, ...over }
 }
 
 export function snapshot(parts: Partial<Snapshot> = {}): Snapshot {

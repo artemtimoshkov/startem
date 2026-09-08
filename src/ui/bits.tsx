@@ -135,6 +135,25 @@ export function Percent({ rate }: { rate: number | null }) {
   return <span className="pct">{rate == null ? '—' : `${Math.round(rate * 100)}%`}</span>
 }
 
+/** The standalone back link, for a screen whose TopBar carries other things. */
+export function TopBarBack({ to }: { to: string }) {
+  return (
+    <button type="button" className="backlink" onClick={() => back(to)}>
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+        <path
+          d="M10 3.5L5 8l5 4.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      Back
+    </button>
+  )
+}
+
 export function TopBar({
   title,
   sub,
@@ -265,6 +284,28 @@ export function Flag({ size = 13 }: { size?: number }) {
     <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden="true">
       <path d="M4 2v12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
       <path d="M4.9 2.6h7l-1.6 2.7 1.6 2.7h-7z" fill="currentColor" />
+    </svg>
+  )
+}
+
+/** A streak. Small, because a streak is encouragement, not a headline. */
+export function Flame({ size = 12 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden="true">
+      <path
+        d="M8 1.6c.5 2.2-.6 3.1-1.7 4.2C5 7.1 4 8.2 4 10a4 4 0 108 0c0-1.6-.7-2.6-1.4-3.5-.3.6-.7 1-1.2 1.2.5-2-.2-4.3-1.4-6.1z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
+
+/** A goal: an aim, drawn as one. */
+export function Target({ size = 15 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden="true" fill="none" stroke="currentColor">
+      <circle cx="8" cy="8" r="5.6" strokeWidth="1.4" />
+      <circle cx="8" cy="8" r="2.2" strokeWidth="1.4" />
     </svg>
   )
 }
