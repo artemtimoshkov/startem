@@ -40,7 +40,8 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
+        // mp3 is the completion chime: a tick offline should still sound.
+        globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,mp3}'],
         // Deep links have to work with no network too, so a navigation to any
         // route falls back to the cached shell — the offline twin of §11's
         // `vercel.json` rewrite.

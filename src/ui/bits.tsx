@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { CheckinStatus, Importance } from '../core'
 import { back } from './router'
+import { playCompleteSound } from './sound'
 
 export function Tick({ size = 14 }: { size?: number }) {
   return (
@@ -55,6 +56,10 @@ export function Chevron() {
  * priority belongs on the thing you tap, not beside it.
  *
  * Ticking again clears the row back to unresolved (§7).
+ *
+ * The chime lives here rather than at the call sites so that every way of
+ * marking something done sounds the same, and so that only *marking* it does:
+ * clearing the row is silent (§8).
  */
 export function TickButton({
   status,
@@ -76,7 +81,10 @@ export function TickButton({
       aria-pressed={status === 'done'}
       aria-label={status === 'done' ? `Untick ${label}` : `Tick ${label}`}
       disabled={disabled}
-      onClick={onTick}
+      onClick={() => {
+        if (status !== 'done') playCompleteSound()
+        onTick()
+      }}
     >
       {status === 'done' ? <Tick /> : null}
     </button>

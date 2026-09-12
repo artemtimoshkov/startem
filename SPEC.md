@@ -422,7 +422,7 @@ The day detail view includes pending items — it's a checklist, so it must show
 
 | Action | Effect |
 |---|---|
-| Tick an item | Writes `done`. Ticking again clears the row back to unresolved. |
+| Tick an item | Writes `done`, and plays the completion chime (§8). Ticking again clears the row back to unresolved — silently. |
 | Cross out an item | Writes `skipped` — an immediate miss. Reversible; restoring returns it to pending. |
 | Back-date | **No surface as of v3.0** — the day screen was the only one, and it went with the calendar. The rule it enforced still stands in `canEditDay` for whatever brings it back: any day within **182 days** (26 weeks) is correctable, and a future day never is. |
 | Pause / resume a habit | Opens or closes a pause period on **that habit** (§3). One switch, on the habit screen. |
@@ -480,6 +480,18 @@ The app's rule about its own text: **an affordance beats a sentence about the af
 - **No prose under a control** explaining what the control just did, what a to-do is, or what pausing means. What is left is a handful of hints inside pickers that state a real constraint (a monthly day is 1–28), and the one place with no affordance to point at: iOS has no install button, so **Add to home screen** spells out the two taps that do work (§9).
 - **Icons where an icon is unambiguous**: the tab bar is three glyphs with no captions, Edit is a pencil, Back is an arrow. Each carries a real `aria-label`, because "unambiguous" is about the eye and a screen reader has neither.
 - **The screen says what it is once**, in its title, and nothing repeats it.
+
+### The one sound
+
+A short chime — about a second and a half — on the tick that marks something **done**, habit or to-do alike. Nothing else in the app makes a noise: not an untick, not a cross-out, not a save, not a goal reached. The app is a list you tap your way down, and one tone at the moment of completion is the only audio that earns a place; a second one would turn the morning into a drum kit.
+
+The details that are load-bearing:
+
+- **An `<audio>` element, not the Web Audio API.** On iOS an element's output follows the ring/silent switch, so a phone on silent is a silent app. That is also why there is **no in-app mute** — the switch on the side of the phone is one already, and the settings screen that would hold a second one went in v2.6 (§7).
+- **Made at boot, played from the tap.** The file is fetched and decoded on load so the first tick of a session is not the slow one; the `play()` itself rides the tap, which is the only thing iOS will start audio from.
+- **It lives on the tick control**, not at the call sites, so every route to "done" sounds the same and only *marking* done sounds at all.
+- **Precached with the rest of the bundle** — §9's `globPatterns` includes `mp3`, so a tick on a plane still chimes.
+- **Failure is silent.** No audio device, a blocked autoplay policy, a failed decode: the chime is skipped and the check-in is written anyway. A database write must never ride on whether a speaker answered.
 
 ### Non-negotiables
 
