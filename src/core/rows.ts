@@ -195,6 +195,20 @@ export interface SubgoalContext {
 }
 
 /**
+ * A task's area: a number, or null for unfiled.
+ *
+ * Zero and the empty string are not areas — they are what a missing column
+ * reads as — so both fall through to the fallback and then to null.
+ */
+function areaIdOf(raw: unknown, fallback: number | undefined): number | null {
+  if (raw != null && raw !== '') {
+    const id = asInt(raw, 0)
+    if (id !== 0) return id
+  }
+  return fallback != null && fallback !== 0 ? fallback : null
+}
+
+/**
  * The important one. A fixed monthly day is clamped to 1–28 here as well as on
  * read, and the two cadence modes are kept mutually exclusive: a non-null
  * `month_weekday` selects weekday mode, so the fixed day is dropped rather
@@ -234,9 +248,11 @@ export function normaliseSubgoal(
 
   return {
     id: asInt(raw['id'], 0),
-    // A task belongs to exactly one area. An export written before tasks had
-    // one of their own gets it from the goal they used to hang on (§3).
-    area_id: asInt(raw['area_id'], context.area_id ?? 0),
+    // A task hangs off one area, or off nothing. An export written before
+    // tasks had an area of their own takes it from the goal they used to hang
+    // on; a row that names no area at all is **unfiled**, not repaired onto
+    // whichever spoke happens to be first (§3).
+    area_id: areaIdOf(raw['area_id'], context.area_id),
     title: asText(raw['title']),
     importance: asEnum(raw['importance'], IMPORTANCES, context.importance ?? 'medium'),
     cadence_type: cadence,

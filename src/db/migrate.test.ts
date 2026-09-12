@@ -79,6 +79,9 @@ async function seedV2(): Promise<void> {
     { id: 103, goal_id: 42, area_id: 1, title: 'No screens', importance: 'low', cadence_type: 'daily', days: [], created_at: '2026-01-04', archived: false },
     // Already goal-less: the v2 shape for a task hung straight off an area.
     { id: 104, goal_id: null, area_id: 2, title: 'Deep work', importance: 'high', cadence_type: 'weekly', days: [2], created_at: '2026-01-04', archived: false },
+    // Neither a goal nor an area: the orphan the upgrade used to file under
+    // area zero, which is not an area, and so lost it from every list.
+    { id: 105, goal_id: null, title: 'Renew the passport', importance: 'medium', cadence_type: 'once', days: [], created_at: '2026-01-04', archived: false },
   ])
   await put(db, 'checkins', [{ subgoal_id: 101, date: '2026-08-19', status: 'done' }])
   await put(db, 'freezes', [{ id: 7, goal_id: 42, start_date: '2026-06-01', end_date: null }])
@@ -103,7 +106,22 @@ describe('upgrading a v2 store', () => {
       [102, 1],
       [103, 1],
       [104, 2],
+      [105, null], // nothing to inherit: unfiled, not area zero
     ])
+  })
+
+  /**
+   * A task with no goal and no area survives as **unfiled** and stays on the
+   * lists. Filing it under area zero — which is not an area — dropped it from
+   * every view the moment the store was read back (§3).
+   */
+  it('keeps an orphan task, unfiled and still listed', async () => {
+    const { buildIndex, buildTodos } = await import('../core')
+    const snapshot = await repo.loadSnapshot()
+    expect(buildIndex(snapshot, '2026-08-26').unfiled.map((t) => t.id)).toEqual([105])
+    expect(buildTodos(snapshot, '2026-08-26').items.map((i) => i.title)).toContain(
+      'Renew the passport',
+    )
   })
 
   it('drops goal_id from the row entirely, rather than leaving it to rot', async () => {

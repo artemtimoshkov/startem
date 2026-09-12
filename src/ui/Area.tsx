@@ -24,11 +24,11 @@ import { createGoal, deleteGoal, saveGoal, setGoalStatus } from '../db/repo'
 import { useSnapshot } from './DataContext'
 import { WeekStrip } from './charts'
 import {
+  Fab,
   Flame,
   ImportanceDot,
   InlineConfirm,
   Percent,
-  Plus,
   ScoreBadge,
   TopBar,
   Target,
@@ -77,20 +77,15 @@ export function AreaScreen({ areaId }: { areaId: number }) {
 
       <p className="section-label">Habits</p>
 
+      {/* Opened from an area, the composer opens *on* that area: standing on
+          the screen is as deliberate a choice as tapping the chip (§7). */}
       {composing ? (
         <TaskComposer
           initial={{ area_id: areaId }}
           onSaved={() => setComposing(false)}
           onCancel={() => setComposing(false)}
         />
-      ) : (
-        <button type="button" className="add-task" onClick={() => setComposing(true)}>
-          <span className="add-task-plus">
-            <Plus size={15} />
-          </span>
-          Add habit
-        </button>
-      )}
+      ) : null}
 
       {habits.length > 0 ? (
         <div className="card">
@@ -158,6 +153,8 @@ export function AreaScreen({ areaId }: { areaId: number }) {
           </div>
         </>
       ) : null}
+
+      {composing ? null : <Fab label="Add habit" onClick={() => setComposing(true)} />}
     </div>
   )
 }
@@ -261,14 +258,22 @@ function GoalRow({
   const [draft, setDraft] = useState({ title: goal.title, description: goal.description })
   const [confirming, setConfirming] = useState(false)
 
+  /**
+   * Unsaved edits. The description is the reason this is on screen: a
+   * paragraph typed into a box with no button looks unsaved whether or not it
+   * is, and on a phone there is often nowhere to tap that would blur it (§7).
+   */
+  const dirty =
+    draft.title.trim() !== goal.title || draft.description.trim() !== goal.description
+
   const save = () => {
-    if (draft.title.trim() === goal.title && draft.description.trim() === goal.description) return
+    if (!dirty) return
     void saveGoal(
       {
         id: goal.id,
         area_id: goal.area_id,
         title: draft.title.trim() || goal.title,
-        description: draft.description,
+        description: draft.description.trim(),
       },
       today,
     )
@@ -328,6 +333,18 @@ function GoalRow({
                 onClick={() => setConfirming(true)}
               >
                 Remove
+              </button>
+              {/* Always rendered, never conditional: a button that appears
+                  only while there are changes is a button that vanishes under
+                  the thumb the moment the field blurs. It goes quiet instead,
+                  and says which of the two states the goal is in. */}
+              <button
+                type="button"
+                className={`btn btn-sm goal-save ${dirty ? 'btn-primary' : 'btn-quiet'}`}
+                disabled={!dirty}
+                onClick={save}
+              >
+                {dirty ? 'Save' : 'Saved'}
               </button>
             </div>
           )}

@@ -188,6 +188,30 @@ describe('saving a task', () => {
     expect(idx.habitsByArea.get(3)?.map((t) => t.id)).toEqual([id])
   })
 
+  /**
+   * A task with no area is stored unfiled, not repaired onto a spoke: it is
+   * listed and ticked like any other, and nothing scores it (§3, §5).
+   */
+  it('stores a task with no area as unfiled, and keeps it off the star', async () => {
+    const id = await saveTask(draft({ area_id: null, title: 'Stretch' }), TODAY)
+    expect((await db.subgoals.get(id))?.area_id).toBeNull()
+
+    const idx = buildIndex(await loadSnapshot(), TODAY)
+    expect(idx.tasks.map((t) => t.id)).toContain(id)
+    expect(idx.unfiled.map((t) => t.id)).toEqual([id])
+    for (const area of idx.areas) {
+      expect(idx.subgoalsByArea.get(area.id)?.map((t) => t.id)).not.toContain(id)
+    }
+  })
+
+  it('files an unfiled task the moment an area is chosen, and unfiles it again', async () => {
+    const id = await saveTask(draft({ area_id: null, title: 'Stretch' }), TODAY)
+    await moveTask(id, 2)
+    expect((await db.subgoals.get(id))?.area_id).toBe(2)
+    await moveTask(id, null)
+    expect((await db.subgoals.get(id))?.area_id).toBeNull()
+  })
+
   it('files a repeating task as a habit and a one-time one as a to-do', async () => {
     const habit = await saveTask(draft({ area_id: 1, title: 'Wake at 7' }), TODAY)
     const todo = await saveTask(

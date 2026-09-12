@@ -82,7 +82,10 @@ export class StartemDB extends Dexie {
           .toCollection()
           .modify((row: Record<string, unknown>) => {
             const parent = byId.get(row['goal_id'] as number)
-            row['area_id'] = row['area_id'] ?? parent?.area_id ?? 0
+            // No area of its own and no goal to inherit one from: the task is
+            // **unfiled**, not filed under area zero. Zero is not an area, so
+            // that row used to vanish from every list on the next open (§3).
+            row['area_id'] = row['area_id'] ?? parent?.area_id ?? null
             row['importance'] = row['importance'] ?? parent?.importance ?? 'medium'
             row['interval'] = row['interval'] ?? 1
             row['start_date'] = row['start_date'] ?? null
@@ -106,7 +109,8 @@ export class StartemDB extends Dexie {
      * pauses. Three things have to happen here rather than later:
      *
      * - a task keeps the area it was scoring against, taken from its goal when
-     *   its own column never got one;
+     *   its own column never got one, and is left **unfiled** when there is no
+     *   area to be had — it is then on every list and on no spoke (§3);
      * - `frozen` is not a goal state any more, so a frozen goal comes back as
      *   active — but its **pause periods survive**, re-pointed at each task
      *   that hung off it. Dropping them would back-fill every dormant week
@@ -146,8 +150,9 @@ export class StartemDB extends Dexie {
               if (bucket) bucket.push(row['id'] as number)
               else tasksByGoal.set(goalId, [row['id'] as number])
             }
-            if (!row['area_id'] && goalId != null) {
-              row['area_id'] = areaOfGoal.get(goalId) ?? 0
+            if (!row['area_id']) {
+              // Unfiled rather than zero, for the same reason as v2 above.
+              row['area_id'] = (goalId == null ? null : areaOfGoal.get(goalId)) ?? null
             }
             delete row['goal_id']
           })

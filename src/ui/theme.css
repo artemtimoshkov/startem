@@ -121,7 +121,9 @@ a { color: var(--accent); text-decoration: none; }
 
 .screen {
   flex: 1;
-  padding: 0 var(--gutter) calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 32px);
+  /* The tail clears the tab bar *and* the floating add button, so the last row
+     of a list is never parked underneath it. */
+  padding: 0 var(--gutter) calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 96px);
 }
 
 /* The header stays put while the list scrolls under it — the one thing that
@@ -255,6 +257,19 @@ a { color: var(--accent); text-decoration: none; }
 }
 
 
+/* A day, as a heading over the list it orders. Bigger and darker than a
+   section label and not shouted in capitals: it is the spine of both lists
+   now, and there is one of them every few rows. */
+.day-head {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  color: var(--text-secondary);
+  margin: 26px 0 6px;
+}
+.day-head.is-late { color: var(--imp-high); }
+.day-head.is-quiet { color: var(--text-tertiary); }
+
 .hairline { height: 1px; background: var(--hairline); border: 0; margin: 0; }
 
 /* ------------------------------------------------------------ list rows -- */
@@ -387,6 +402,9 @@ a { color: var(--accent); text-decoration: none; }
 .btn-sm { padding: 6px 12px; font-size: 13px; }
 .btn:disabled { opacity: 0.4; cursor: default; }
 .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Save sits at the far end, away from Remove: they are the two ends of the
+   same row and must not be adjacent targets. */
+.goal-save { margin-left: auto; }
 
 /* An icon-only control in a header: round, washed, no caption. */
 .icon-btn {
@@ -601,22 +619,38 @@ a { color: var(--accent); text-decoration: none; }
 
 /* ----------------------------------------------------- adding a task -- */
 
-/* One red affordance per screen, and it is the thing the screen is for. No
-   filled block: the plus carries the colour, the label follows it. */
-.add-task {
+/* One red affordance per screen, in the thumb's arc rather than at the top of
+   a list that scrolls away under it. The wrapper is what pins it to the app's
+   own column instead of the window's edge on a wide screen, and it is
+   click-through so it never eats a tap meant for the row beneath it. */
+.fab-wrap {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 16px);
+  z-index: 25;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 13px 2px;
-  margin: 4px 0 0;
-  border-radius: var(--r-default);
-  color: var(--text-secondary);
-  font-size: 15.5px;
-  font-weight: 520;
-  text-align: left;
+  justify-content: flex-end;
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+  pointer-events: none;
 }
-.add-task:hover { color: var(--imp-high); }
+.fab {
+  pointer-events: auto;
+  width: 58px;
+  height: 58px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--imp-high);
+  color: #fff;
+  box-shadow: var(--shadow-2);
+}
+.fab:active { transform: scale(0.94); }
+
+/* The small red plus in front of an inline "add" line — the area form on the
+   star, where the control is a text field rather than a button. */
 .add-task-plus {
   width: 24px;
   height: 24px;

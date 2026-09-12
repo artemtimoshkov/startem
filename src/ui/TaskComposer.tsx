@@ -60,7 +60,8 @@ import {
 
 export interface ComposerValue {
   title: string
-  area_id: number
+  /** Null is unfiled — the composer's default, and a real answer (§7). */
+  area_id: number | null
   importance: Importance
   /** A one-time task's deadline, or a repeating one's start. Optional either way. */
   date: ISODate | null
@@ -177,7 +178,10 @@ export function TaskComposer({
   const { index, today } = useSnapshot()
   const [value, setValue] = useState<ComposerValue>(() => ({
     title: '',
-    area_id: initial?.area_id ?? index.areas[0]?.id ?? 1,
+    /* No area until one is chosen. Defaulting to the first spoke filed
+       everything typed in a hurry under whichever area happened to sort first
+       and quietly scored it there, which is a worse answer than none (§7). */
+    area_id: initial?.area_id ?? null,
     importance: initial?.importance ?? DEFAULT_IMPORTANCE,
     date: initial?.date ?? null,
     time: initial?.time ?? null,
@@ -200,7 +204,7 @@ export function TaskComposer({
 
   const patch = (p: Partial<ComposerValue>) => setValue((v) => ({ ...v, ...p }))
 
-  const area = index.areaById.get(value.area_id)
+  const area = value.area_id == null ? undefined : index.areaById.get(value.area_id)
   const habit = value.repeat.cadence_type !== 'once'
   const canSave = value.title.trim().length > 0 && !saving
 
@@ -286,7 +290,7 @@ export function TaskComposer({
       <div className="composer-chips">
         <button
           type="button"
-          className="chip"
+          className={`chip${area ? ' is-set' : ''}`}
           onClick={() => push('where')}
           aria-label={`Area: ${area?.name ?? 'none'}`}
         >
@@ -468,14 +472,23 @@ function AreaPicker({
   onPick,
   onClose,
 }: {
-  area_id: number
-  onPick: (area_id: number) => void
+  area_id: number | null
+  onPick: (area_id: number | null) => void
   onClose: () => void
 }) {
   const { index } = useSnapshot()
 
   return (
     <Sheet title="Area" onClose={onClose}>
+      {/* An unfiled task is a real answer, not a task waiting to be filed: it
+          is listed and ticked like any other and simply scores nothing, so
+          the way out of the sheet is a row rather than a dismissal (§3). */}
+      <SheetRow
+        label="No area"
+        hint="not on the star"
+        selected={area_id == null}
+        onClick={() => onPick(null)}
+      />
       {index.areas.map((a) => {
         const habits = (index.habitsByArea.get(a.id) ?? []).length
         return (

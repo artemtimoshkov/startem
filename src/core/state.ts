@@ -64,7 +64,12 @@ export interface Index {
   areas: Area[]
   /** Live goals whose area exists, in area order then position. */
   goals: Goal[]
-  /** Live, non-archived tasks whose area exists — habits and to-dos alike. */
+  /**
+   * Live, non-archived tasks — habits and to-dos alike, filed and unfiled.
+   * A task with `area_id: null` is **unfiled** and belongs to no spoke; it is
+   * here and on every list, and in none of the `*ByArea` maps below, which is
+   * exactly why nothing scores it (§5).
+   */
   tasks: Subgoal[]
   /** Just the repeating ones. This is what scoring walks (§5). */
   habits: Subgoal[]
@@ -79,6 +84,8 @@ export interface Index {
   habitsByArea: Map<number, Subgoal[]>
   todosByArea: Map<number, Subgoal[]>
   goalsByArea: Map<number, Goal[]>
+  /** The tasks with no area at all, in the order they were created. */
+  unfiled: Subgoal[]
   /** Pause periods per task (§3). */
   freezesBySubgoal: Map<number, Freeze[]>
   checkinsBySubgoal: Map<number, Map<ISODate, Checkin>>
@@ -111,8 +118,11 @@ export function buildIndex(snapshot: Snapshot, today: ISODate): Index {
   for (const a of areas) goalsByArea.set(a.id, [])
   for (const g of goals) goalsByArea.get(g.area_id)!.push(g)
 
+  // An unfiled task (`area_id: null`) is kept; one pointing at an area that is
+  // no longer there is not — removing an area archives its tasks (§7), so a
+  // dangling reference means the row is older than the removal, not unfiled.
   const subgoals = live(snapshot.subgoals)
-    .filter((s) => !s.archived && areaById.has(s.area_id))
+    .filter((s) => !s.archived && (s.area_id == null || areaById.has(s.area_id)))
     .sort((a, b) => a.id - b.id)
   const subgoalById = new Map(subgoals.map((s) => [s.id, s]))
 
@@ -124,7 +134,12 @@ export function buildIndex(snapshot: Snapshot, today: ISODate): Index {
     habitsByArea.set(a.id, [])
     todosByArea.set(a.id, [])
   }
+  const unfiled: Subgoal[] = []
   for (const s of subgoals) {
+    if (s.area_id == null) {
+      unfiled.push(s)
+      continue
+    }
     subgoalsByArea.get(s.area_id)!.push(s)
     ;(isHabit(s) ? habitsByArea : todosByArea).get(s.area_id)!.push(s)
   }
@@ -161,9 +176,24 @@ export function buildIndex(snapshot: Snapshot, today: ISODate): Index {
     habitsByArea,
     todosByArea,
     goalsByArea,
+    unfiled,
     freezesBySubgoal,
     checkinsBySubgoal,
   }
+}
+
+/** The area a task is filed under, or undefined when it is unfiled. */
+export function areaOf(idx: Index, task: Pick<Subgoal, 'area_id'>): Area | undefined {
+  return task.area_id == null ? undefined : idx.areaById.get(task.area_id)
+}
+
+/**
+ * Where a task sorts among the areas. An unfiled task has no place on the
+ * ring, so it sorts after every area that does.
+ */
+function areaRank(idx: Index, areaId: number | null): number {
+  if (areaId == null) return Number.POSITIVE_INFINITY
+  return idx.areaById.get(areaId)?.position ?? Number.POSITIVE_INFINITY
 }
 
 function checkinsOf(idx: Index, subgoalId: number): CheckinsByDate {
@@ -259,9 +289,10 @@ export function habitStreak(idx: Index, task: Subgoal): number {
 
 export interface TodayItem {
   subgoal_id: number
-  area_id: number
+  /** Null when the task is unfiled — it is on the list, on no spoke (§3). */
+  area_id: number | null
   title: string
-  areaName: string
+  areaName: string | null
   importance: Importance
   weight: number
   cadence_type: Subgoal['cadence_type']
@@ -273,15 +304,8 @@ export interface TodayItem {
   streak: number
 }
 
-export interface TodayGroup {
-  area_id: number
-  areaName: string
-  items: TodayItem[]
-}
-
 export interface TodayView {
   date: ISODate
-  groups: TodayGroup[]
   items: TodayItem[]
   /** Everything listed. */
   total: number
@@ -293,8 +317,12 @@ export interface TodayView {
 }
 
 /**
- * Every **habit** due today, sorted heaviest first, grouped by area in the
- * order the groups first appear (§6).
+ * Every **habit** due today, sorted heaviest first (§6).
+ *
+ * One flat list: the day is the heading now, and an area is a word on the row
+ * rather than a heading of its own. Grouping by area split a short list into
+ * shorter lists and buried the heaviest work under whichever spoke happened to
+ * sort first; the sort already says what matters most.
  *
  * To-dos are not here. The day's list is the habit list, which is what makes
  * it a habit tracker rather than an inbox; `buildTodos` is the other half, and
@@ -307,14 +335,14 @@ export function buildToday(snapshot: Snapshot, today: ISODate): TodayView {
   for (const task of idx.habits) {
     const freezes = taskFreezes(idx, task)
     if (!isScheduled(task, today, freezes)) continue
-    const area = idx.areaById.get(task.area_id)!
+    const area = areaOf(idx, task)
     const todayCheckin = checkinsOf(idx, task.id).get(today)
 
     items.push({
       subgoal_id: task.id,
-      area_id: area.id,
+      area_id: area ? area.id : null,
       title: task.title,
-      areaName: area.name,
+      areaName: area ? area.name : null,
       importance: task.importance,
       weight: weightOf(task),
       cadence_type: task.cadence_type,
@@ -329,34 +357,138 @@ export function buildToday(snapshot: Snapshot, today: ISODate): TodayView {
   items.sort(
     (a, b) =>
       b.weight - a.weight ||
-      idx.areaById.get(a.area_id)!.position - idx.areaById.get(b.area_id)!.position ||
+      areaRank(idx, a.area_id) - areaRank(idx, b.area_id) ||
       a.subgoal_id - b.subgoal_id,
   )
-
-  const groups: TodayGroup[] = []
-  const groupByArea = new Map<number, TodayGroup>()
-  for (const item of items) {
-    let group = groupByArea.get(item.area_id)
-    if (!group) {
-      group = { area_id: item.area_id, areaName: item.areaName, items: [] }
-      groupByArea.set(item.area_id, group)
-      groups.push(group) // in the order the groups first appear
-    }
-    group.items.push(item)
-  }
 
   const doneCount = items.filter((i) => i.status === 'done').length
   const skippedCount = items.filter((i) => i.status === 'skipped').length
 
   return {
     date: today,
-    groups,
     items,
     total: items.length,
     doneCount,
     skippedCount,
     target: items.length - skippedCount,
   }
+}
+
+// ---------------------------------------------------------------------------
+// View 1b — what is coming, day by day (§6)
+// ---------------------------------------------------------------------------
+
+/**
+ * How far ahead the agenda looks.
+ *
+ * Long enough that a monthly habit lands inside it, short enough that a daily
+ * one does not turn the list into a wall. Anything with no occurrence in the
+ * window is still listed — under `later`, once — so a habit can never vanish
+ * simply by being rare (§6).
+ */
+export const AGENDA_DAYS = 30
+
+export interface AgendaItem {
+  subgoal_id: number
+  area_id: number | null
+  title: string
+  areaName: string | null
+  importance: Importance
+  weight: number
+  time: string | null
+  /** True while a pause period covers the day this occurrence falls on. */
+  paused: boolean
+}
+
+export interface AgendaDay {
+  date: ISODate
+  items: AgendaItem[]
+}
+
+export interface AgendaView {
+  /** Tomorrow — the agenda never repeats what the day's list already shows. */
+  from: ISODate
+  /** The last day inside the window, inclusive. */
+  to: ISODate
+  /** Only the days something comes due on. An empty day is not a heading. */
+  days: AgendaDay[]
+  /** Habits with nothing due inside the window — rare cadences and paused ones. */
+  later: AgendaItem[]
+  /** How many distinct habits are not due today. What the section counts. */
+  habitCount: number
+}
+
+function agendaItem(idx: Index, task: Subgoal, date: ISODate): AgendaItem {
+  const area = areaOf(idx, task)
+  return {
+    subgoal_id: task.id,
+    area_id: area ? area.id : null,
+    title: task.title,
+    areaName: area ? area.name : null,
+    importance: task.importance,
+    weight: weightOf(task),
+    time: task.time,
+    paused: isFrozenOn(date, taskFreezes(idx, task)),
+  }
+}
+
+/**
+ * The next `days` days of habits, one group per day that has something on it.
+ *
+ * This is what "Not due today" opens into (§6). It used to be a flat list of
+ * every other habit, which said *that* a habit existed but never *when* it
+ * next lands; the day is the only useful heading for that question, and a day
+ * with nothing due is not a heading at all.
+ *
+ * A paused habit is not scheduled on any day it is paused (§4), so it drops
+ * out of the window and lands in `later` — carrying `paused`, so the screen
+ * can say why it is down there rather than leaving it looking forgotten.
+ */
+export function buildAgenda(
+  snapshot: Snapshot,
+  today: ISODate,
+  days = AGENDA_DAYS,
+): AgendaView {
+  const idx = buildIndex(snapshot, today)
+  const span = Math.max(0, days)
+  const outer = addDays(today, span)
+
+  const groups: AgendaDay[] = []
+  const seen = new Set<number>()
+
+  for (let i = 1; i <= span; i++) {
+    const date = addDays(today, i)
+    const items: AgendaItem[] = []
+    for (const task of idx.habits) {
+      if (!isScheduled(task, date, taskFreezes(idx, task))) continue
+      items.push(agendaItem(idx, task, date))
+      seen.add(task.id)
+    }
+    if (items.length === 0) continue
+    items.sort(
+      (a, b) =>
+        b.weight - a.weight ||
+        areaRank(idx, a.area_id) - areaRank(idx, b.area_id) ||
+        a.subgoal_id - b.subgoal_id,
+    )
+    groups.push({ date, items })
+  }
+
+  // Everything the window never showed, and that today is not showing either.
+  const later: AgendaItem[] = []
+  let habitCount = 0
+  for (const task of idx.habits) {
+    if (isScheduled(task, today, taskFreezes(idx, task))) continue
+    habitCount++
+    if (seen.has(task.id)) continue
+    later.push(agendaItem(idx, task, today))
+  }
+  later.sort(
+    (a, b) =>
+      areaRank(idx, a.area_id) - areaRank(idx, b.area_id) || a.subgoal_id - b.subgoal_id,
+  )
+
+  return { from: addDays(today, 1), to: outer, days: groups, later, habitCount }
 }
 
 // ---------------------------------------------------------------------------
@@ -368,9 +500,10 @@ export type TodoBucket = 'overdue' | 'today' | 'upcoming' | 'someday' | 'done'
 
 export interface TodoItem {
   subgoal_id: number
-  area_id: number
+  /** Null when the task is unfiled — it is on the list, on no spoke (§3). */
+  area_id: number | null
   title: string
-  areaName: string
+  areaName: string | null
   importance: Importance
   due_date: ISODate | null
   time: string | null
@@ -381,8 +514,20 @@ export interface TodoItem {
   bucket: TodoBucket
 }
 
+/**
+ * A run of to-dos sharing one heading.
+ *
+ * The heading is a **day**, not a pile: "Overdue / Today / Upcoming" said the
+ * same thing three times over and hid the one fact that matters, which is
+ * *when*. Only days something is actually due on get a section, and the two
+ * things that have no day of their own — undated and finished — are the tail.
+ */
 export interface TodoSection {
-  bucket: TodoBucket
+  kind: 'date' | 'someday' | 'done'
+  /** The deadline every item in a `date` section shares; null for the tails. */
+  date: ISODate | null
+  /** A `date` section whose day has already passed. */
+  overdue: boolean
   items: TodoItem[]
 }
 
@@ -414,7 +559,7 @@ export function buildTodos(snapshot: Snapshot, today: ISODate): TodosView {
   const items: TodoItem[] = []
 
   for (const task of idx.todos) {
-    const area = idx.areaById.get(task.area_id)!
+    const area = areaOf(idx, task)
     const checkins = checkinsOf(idx, task.id)
     const freezes = taskFreezes(idx, task)
     const occ = onceOccurrence(task, today, checkins, freezes)
@@ -431,9 +576,9 @@ export function buildTodos(snapshot: Snapshot, today: ISODate): TodosView {
 
     items.push({
       subgoal_id: task.id,
-      area_id: area.id,
+      area_id: area ? area.id : null,
       title: task.title,
-      areaName: area.name,
+      areaName: area ? area.name : null,
       importance: task.importance,
       due_date: task.due_date,
       time: task.time,
@@ -459,10 +604,20 @@ export function buildTodos(snapshot: Snapshot, today: ISODate): TodosView {
     return weightOf(wb) - weightOf(wa) || a.subgoal_id - b.subgoal_id
   })
 
+  // One section per day something is due on, oldest first — so what is late
+  // sits at the top by arithmetic rather than by a pile of its own — then the
+  // undated, then the recently finished.
   const sections: TodoSection[] = []
-  for (const bucket of BUCKET_ORDER) {
-    const inBucket = items.filter((i) => i.bucket === bucket)
-    if (inBucket.length > 0) sections.push({ bucket, items: inBucket })
+  let current: TodoSection | null = null
+  for (const item of items) {
+    const kind: TodoSection['kind'] =
+      item.bucket === 'done' ? 'done' : item.bucket === 'someday' ? 'someday' : 'date'
+    const date = kind === 'date' ? item.due_date : null
+    if (!current || current.kind !== kind || current.date !== date) {
+      current = { kind, date, overdue: kind === 'date' && date != null && date < today, items: [] }
+      sections.push(current)
+    }
+    current.items.push(item)
   }
 
   const open = items.filter((i) => i.status == null)
@@ -804,9 +959,9 @@ export function buildCalendar(
 
 export interface DayDetailItem {
   subgoal_id: number
-  area_id: number
+  area_id: number | null
   title: string
-  areaName: string
+  areaName: string | null
   importance: Importance
   weight: number
   /** null means unresolved. */
@@ -835,7 +990,7 @@ export function buildDayDetail(
   const items: DayDetailItem[] = []
 
   for (const task of idx.habits) {
-    const area = idx.areaById.get(task.area_id)!
+    const area = areaOf(idx, task)
     const checkins = checkinsOf(idx, task.id)
     const checkin = checkins.get(date)
     const occ = occurrenceOn(task, date, today, checkins, taskFreezes(idx, task))
@@ -846,9 +1001,9 @@ export function buildDayDetail(
 
     items.push({
       subgoal_id: task.id,
-      area_id: area.id,
+      area_id: area ? area.id : null,
       title: task.title,
-      areaName: area.name,
+      areaName: area ? area.name : null,
       importance: task.importance,
       weight: weightOf(task),
       status: checkin ? checkin.status : occ ? occ.status : null,
@@ -859,7 +1014,7 @@ export function buildDayDetail(
   items.sort(
     (a, b) =>
       b.weight - a.weight ||
-      idx.areaById.get(a.area_id)!.position - idx.areaById.get(b.area_id)!.position ||
+      areaRank(idx, a.area_id) - areaRank(idx, b.area_id) ||
       a.subgoal_id - b.subgoal_id,
   )
 

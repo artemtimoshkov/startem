@@ -74,15 +74,21 @@ export interface Goal extends SyncMeta {
 /**
  * A task — the only thing that ever gets ticked.
  *
- * Stored as `subgoals` for continuity with §3's table names. A task belongs to
- * exactly one **area**; there is no goal in between (§3). A repeating task is a
- * *habit* and is what the star scores; a `once` task is a *to-do*, tracked here
- * for convenience and deliberately kept out of scoring (§5).
+ * Stored as `subgoals` for continuity with §3's table names. A task hangs off
+ * an **area** or off nothing at all; there is never a goal in between (§3). A
+ * repeating task is a *habit* and is what the star scores; a `once` task is a
+ * *to-do*, tracked here for convenience and deliberately kept out of scoring
+ * (§5).
  */
 export interface Subgoal extends SyncMeta {
   id: number
-  /** → areas.id. Required: every task belongs to exactly one area. */
-  area_id: number
+  /**
+   * → areas.id, and the only parent a task has. **Null is unfiled**: the task
+   * is listed and can be ticked, but it belongs to no spoke of the star and is
+   * therefore scored by nothing (§3, §5). A task only lands on the star when
+   * the area is chosen deliberately.
+   */
+  area_id: number | null
   title: string
   /** Sets the weight of every occurrence unless `weight` overrides it (§5). */
   importance: Importance

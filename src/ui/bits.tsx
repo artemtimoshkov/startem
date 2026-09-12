@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { addDays } from '../core'
 import type { CheckinStatus, Importance } from '../core'
 import { back } from './router'
 import { playCompleteSound } from './sound'
@@ -275,6 +276,32 @@ export function formatDate(date: string, opts: Intl.DateTimeFormatOptions = {}):
   })
 }
 
+/**
+ * A day, as the lists head it: `13 Sep · Today · Sunday`.
+ *
+ * The date comes first because that is what the list is ordered by; the
+ * relative word is dropped once there isn't one, and the weekday stays on
+ * every heading — "Tuesday" is how a week is actually planned, and reading it
+ * off a bare date is work the heading should have done.
+ */
+export function dayHeading(date: string, today: string): string {
+  const relative =
+    date === today
+      ? 'Today'
+      : date === addDays(today, 1)
+        ? 'Tomorrow'
+        : date === addDays(today, -1)
+          ? 'Yesterday'
+          : null
+  return [
+    formatDate(date, { weekday: undefined }),
+    relative,
+    formatDate(date, { weekday: 'long', day: undefined, month: undefined }),
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 export const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 export const WEEKDAY_INITIALS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 
@@ -331,6 +358,25 @@ export function Plus({ size = 18 }: { size?: number }) {
         strokeLinecap="round"
       />
     </svg>
+  )
+}
+
+/**
+ * The one red affordance, floated bottom-right above the tab bar.
+ *
+ * It sits in the thumb's arc on a phone, which is the whole reason it left the
+ * top of the list: adding something is the action every one of these screens
+ * exists for, and it should not be a scroll away once the list is long. The
+ * wrapper is what keeps it inside the app's column on a wide window, and it is
+ * click-through so it never eats a tap meant for the row underneath.
+ */
+export function Fab({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <div className="fab-wrap">
+      <button type="button" className="fab" aria-label={label} onClick={onClick}>
+        <Plus size={26} />
+      </button>
+    </div>
   )
 }
 
