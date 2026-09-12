@@ -1038,7 +1038,15 @@ a { color: var(--accent); text-decoration: none; }
   padding: 13px 2px;
   border-top: 1px solid var(--hairline);
 }
-.goal-add-icon { display: inline-flex; color: var(--text-tertiary); }
+.goal-add-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  color: var(--text-tertiary);
+}
 .goal-add-input {
   flex: 1;
   min-width: 0;
