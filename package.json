@@ -17,6 +17,7 @@
     "dev:pwa": "VITE_DEV_PWA=1 vite"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "dexie": "^4.4.5",
     "dexie-react-hooks": "^4.4.0",
     "react": "^18.3.1",
