@@ -221,7 +221,8 @@ export async function reorderGoals(areaId: number, orderedIds: number[]): Promis
 /** What the task composer hands back. No id means a new task. */
 export interface TaskDraft {
   id?: number
-  area_id: number
+  /** Null files the task nowhere: it is listed, and no area scores it (§3). */
+  area_id: number | null
   title: string
   importance: Importance
   cadence_type: Subgoal['cadence_type']
@@ -276,8 +277,11 @@ export async function archiveTask(taskId: number, archived = true): Promise<void
   await db.subgoals.put({ ...task, archived, updated_at: stamp() })
 }
 
-/** Moves a task to another area. That is the only place a task can live (§3). */
-export async function moveTask(taskId: number, area_id: number): Promise<void> {
+/**
+ * Moves a task to another area, or out of every area when `area_id` is null.
+ * An area is the only parent a task can have, and it can have none (§3).
+ */
+export async function moveTask(taskId: number, area_id: number | null): Promise<void> {
   const task = await db.subgoals.get(taskId)
   if (!task) return
   await db.subgoals.put({ ...task, area_id, updated_at: stamp() })

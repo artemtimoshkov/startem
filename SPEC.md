@@ -48,7 +48,7 @@ The other thing an area holds is the odd **to-do** — a one-time task, kept her
 
 Completing habits, weighted by each habit's own priority, is the only thing that moves an area's score.
 
-Three screens: **Today** (the habits due, ticked as you go), **To-dos** (the errands, in deadline piles) and the **star** (where you stand, and where the areas themselves are edited).
+Three screens: **Today** (the habits due, ticked as you go), **To-dos** (the errands, by deadline) and the **star** (where you stand, and where the areas themselves are edited).
 
 It runs in two places off one codebase: **installed on the iPhone home screen** as an offline-first web app, and **signed in on the web** at a subdomain. Both are the same deployed site; the phone install simply keeps its own copy of the data and syncs it.
 
@@ -123,7 +123,7 @@ Stored as `subgoals` for continuity with the original schema; everywhere else th
 | Field | Type | Notes |
 |---|---|---|
 | id | bigint, pk | — |
-| area_id | bigint, fk | → areas.id. **Required, and the only parent a task has.** |
+| area_id | bigint, fk, null | → areas.id. **The only parent a task has, and optional.** Null is *unfiled*: the task is listed and ticked like any other and belongs to no spoke, so nothing scores it. A new task starts unfiled — see §7. |
 | title | text | — |
 | importance | enum | `high` / `medium` / `low`. Sets the weight of every occurrence. A row that arrives without one is repaired to `medium`; the composer opens a **new** task on `low` (P3) — see §7. |
 | cadence_type | enum | `daily` / `weekly` / `monthly` / `quarterly` / `once`. **`once` is the to-do; everything else is a habit.** |
@@ -141,6 +141,8 @@ Stored as `subgoals` for continuity with the original schema; everywhere else th
 | archived | bool | Removed from the interface, but its history stays meaningful. |
 
 > **`repeat_until` is inclusive, unlike a freeze's exclusive `end_date`.** The repeat editor says "on date (inclusive)" out loud, and a task that ends on the 30th has to come due on the 30th. The two asymmetries are deliberate and different: a freeze is a period you come *out* of, a repeat is a run of days you are *in*.
+
+> **Unfiled is an answer, not a missing one.** A task with no area is a first-class task everywhere but the star: it is due when its cadence says so, it is ticked, it counts on the day's list. It is simply on no spoke, so no area's tally can see it (§5). Note that **zero is not an area** — a row repaired onto `area_id: 0` disappears from every view, which is what the v2/v3 upgrades and `normaliseSubgoal` now write null for instead.
 
 > **Archive, never delete:** When a user removes a task, set `archived` rather than deleting the row. Its past check-ins still exist and still describe real days; deleting the task would orphan them and silently rewrite history.
 
@@ -244,7 +246,7 @@ The single date field means two different things depending on the repeat, and th
 
 A to-do never recurs — `isScheduled` is false for it on every date. It is one thing, done once, and it is **not scored at all** (§5): ticking it moves nothing on the star, and blowing its deadline drags nothing down. With no `due_date` it sits on the list indefinitely until done.
 
-It still needs a date to be *displayed* against, though — the to-do list sorts into five piles from the deadline alone, and the piles are recomputed on every read rather than filed into:
+It still needs a date to be *displayed* against, though — every to-do is sorted into one of five piles from the deadline alone, recomputed on every read rather than filed into. The piles order the list and drive the counts; the **headings** the screen draws are the days themselves (§6):
 
 | Pile | Rule |
 |---|---|
@@ -352,17 +354,23 @@ Two of them are **built but not surfaced** as of v3.0 — the weekly strip is dr
 
 ### The day's list — habits only
 
-Every live **habit** due today, **sorted heaviest first** so the day's most important work is at the top. Grouped by area in the order the groups first appear, which follows from the sort. Progress reads `done of (total − crossed out)`, so crossing something out removes it from the target rather than making the day unwinnable.
+Every live **habit** due today, **sorted heaviest first** so the day's most important work is at the top, in **one flat list under the day itself** — `13 Sep · Today · Sunday`. The area is a word on the row, linking to its screen; an unfiled task simply has none. Progress reads `done of (total − crossed out)`, so crossing something out removes it from the target rather than making the day unwinnable.
 
-A to-do is **never** in this list, pending or done (§1). The screen carries one red affordance — **Add habit**, which opens the composer in place, on Habit (§7) — and below the day's groups sits a collapsed **Not due today** list of every other habit that exists. Without it, a habit set to "every Monday" and added on a Wednesday would vanish the instant it was saved, since the day's list is the only list.
+> **The day is the heading, not the area.** Grouping the list by area chopped a short list into shorter ones and buried the heaviest work under whichever spoke sorted first. The sort already says what matters most, and the one heading a daily list wants is the day.
+
+A to-do is **never** in this list, pending or done (§1). The screen carries one red affordance — a **floating add button**, bottom-right and in the thumb's arc, which opens the composer in place, on Habit (§7) — and below the day sits a collapsed **Not due today**, counting every habit not owed today. Without it, a habit set to "every Monday" and added on a Wednesday would vanish the instant it was saved, since the day's list is the only list.
+
+Opened, that section is an **agenda**: `buildAgenda` walks the next **30 days**, one heading per day something comes due on, in the same heaviest-first order. A day with nothing on it gets no heading. Anything with no occurrence inside the window — a quarterly habit, or one that is paused — is listed once under **Later**, carrying its pause, so nothing can vanish by being rare.
 
 Under all of that, and only when there is something to show, sits a separate **To-dos** block: the open to-dos that are due today or already overdue. It is the one place the two lists touch, it is visibly its own section, and it never touches the day's count.
 
-An empty day draws **nothing** — no card explaining that there is nothing due. "Add habit" is on screen either way, and it says everything the paragraph did (§8).
+An empty day draws **nothing** — no card explaining that there is nothing due. The add button is on screen either way, and it says everything the paragraph did (§8).
 
 ### The to-do list
 
-Every to-do, in the five piles of §4, with the piles derived from the deadline on every read. Inside a pile: soonest deadline first, then heaviest, then oldest — except the finished pile, which reads most recently finished first. A habit is never in this list.
+Every to-do, ordered by deadline and **headed by the day**, exactly as the day's list is: one section per day something is due on, oldest first, and never a day nothing is due on. Late is a word on the day — `4 Sep · Friday · Overdue` — rather than a pile of its own, because a pile said "overdue" and hid *when*. The two runs with no day of their own keep a name: **No date**, then **Finished**.
+
+The five piles of §4 are still derived on every read: they are what orders the list and what the counts and the tab badge are computed from, and each item carries its own. Inside a day: heaviest first, then oldest — except the finished run, which reads most recently finished first. A habit is never in this list.
 
 The to-do tab carries a **badge with the overdue count**, because that tab is the only place a deadline is visible and a silent one would be missed.
 
@@ -426,7 +434,8 @@ The day detail view includes pending items — it's a checklist, so it must show
 | Cross out an item | Writes `skipped` — an immediate miss. Reversible; restoring returns it to pending. |
 | Back-date | **No surface as of v3.0** — the day screen was the only one, and it went with the calendar. The rule it enforced still stands in `canEditDay` for whatever brings it back: any day within **182 days** (26 weeks) is correctable, and a future day never is. |
 | Pause / resume a habit | Opens or closes a pause period on **that habit** (§3). One switch, on the habit screen. |
-| Add a task | The composer: a **Habit / To-do switch**, a line to type into, and chips for **which area**, **when** (date → calendar, shortcuts, time, repeat) and **priority**. Typing `p1` / `p2` / `p3` sets the priority and leaves the title. |
+| Add a task | The **floating button**, bottom-right on every list screen and in the thumb's arc, opens the composer in place: a **Habit / To-do switch**, a line to type into, and chips for **which area**, **when** (date → calendar, shortcuts, time, repeat) and **priority**. Typing `p1` / `p2` / `p3` sets the priority and leaves the title. |
+| Area of a new task | **None.** A new task opens unfiled and only lands on a spoke when the area chip is used; the Area sheet offers **No area** as a row, alongside the areas. Opening the composer from an area screen files it there, because standing on that screen is as deliberate as tapping the chip. Defaulting to the first area on the ring filed everything typed in a hurry under whichever spoke happened to sort first and then quietly scored it there, which is a worse answer than none (§3). |
 | Habit or to-do | One switch at the top of the composer, and it writes **nothing but the repeat** — the distinction *is* the repeat (§3). Turning a to-do into a habit with no repeat set gives it **every day**; turning a habit into a to-do clears it and keeps the date as the deadline. The composer opens on **Habit** everywhere except the to-do screen, because this is a habit tracker and the common case should cost no taps. |
 | Priority of a new task | Opens on **P3 / low** (weight 1), not the middle of the scale. Most of what gets typed in is ordinary, and defaulting to P2 quietly counted every routine task double a genuinely small one until it was corrected by hand. Starting at the floor makes *raising* the priority the deliberate act. Editing an existing task still opens on whatever it already carries. |
 | Pick a date | The date sheet offers **Today**, **Tomorrow**, **This weekend** (the coming Saturday, or today when today is a Saturday or a Sunday) and **No date**, then a month grid. Picking a day **does not close the sheet** — it turns that day red and leaves Time and Repeat, which live in the same sheet's footer, one tap away. The sheet closes on the backdrop, the ✕ or Escape. |
@@ -435,7 +444,7 @@ The day detail view includes pending items — it's a checklist, so it must show
 | Archive a task | Removes it from the interface; the row and its check-ins stay. |
 | Write a goal | One line on the **area screen**, under **Goals**. A goal has no screen of its own, because there is nothing to put on one. |
 | Reach a goal | One tap on its tick: `status` becomes `achieved` and `achieved_on` is set to today. Reopening it clears that date — a goal put back in play must not still claim it was reached in March. |
-| Edit / remove a goal | Tap it to expand: title, description, and Remove. Removing tombstones it and moves nothing else. Confirm inline — never with a browser dialog. |
+| Edit / remove a goal | Tap it to expand: title, description, **Save** and Remove. Save is always on screen — quiet and disabled, reading `Saved`, when there is nothing outstanding — rather than appearing only once there are changes: a button that appears on the first keystroke is a button that vanishes under the thumb the moment the field blurs. Blurring a field still writes, so nothing is lost by navigating away; the button is what says so. Removing tombstones it and moves nothing else. Confirm inline — never with a browser dialog. |
 | Add an area | The **pencil** on the star, then a name. It lands at the end of the ring and the chart redraws around it. Ceiling of **20**. |
 | Rename an area | The same edit mode, in place. Committed on blur rather than on every keystroke: each write re-reads the whole store and rebuilds the star, and a name is not worth doing that once per letter. A blank name is refused. |
 | Reorder an area | Two arrows per row, not a drag. Dragging a list item on a touch screen needs either a library — every kilobyte of which is precached for offline use (§9) — or a hand-rolled gesture that fights the page scroll. Arrows always work, including for a keyboard and a screen reader. |
@@ -476,7 +485,7 @@ Greys are all tinted slightly toward the accent so nothing reads as a stray warm
 
 The app's rule about its own text: **an affordance beats a sentence about the affordance.** In practice —
 
-- **No empty states.** Not on the day with nothing due, not on an empty to-do list, not on an area with no goals written. "Add habit" and "Add to-do" are on those screens either way, and they say the same thing in two words.
+- **No empty states.** Not on the day with nothing due, not on an empty to-do list, not on an area with no goals written. The add button is on those screens either way, and it says the same thing without a word.
 - **No prose under a control** explaining what the control just did, what a to-do is, or what pausing means. What is left is a handful of hints inside pickers that state a real constraint (a monthly day is 1–28), and the one place with no affordance to point at: iOS has no install button, so **Add to home screen** spells out the two taps that do work (§9).
 - **Icons where an icon is unambiguous**: the tab bar is three glyphs with no captions, Edit is a pencil, Back is an arrow. Each carries a real `aria-label`, because "unambiguous" is about the eye and a screen reader has neither.
 - **The screen says what it is once**, in its title, and nothing repeats it.
@@ -553,7 +562,7 @@ The same five tables in Supabase Postgres, each with three extra columns:
 
 Check-ins are unique on `(user_id, subgoal_id, date)` — the same natural key as locally, so two devices editing the same day *upsert into one row* and converge instead of duplicating. "Untick" is not a row deletion on the wire: it writes the tombstone, which is what lets the clearing propagate to the other device.
 
-`freezes.subgoal_id` points at a subgoal, not at a goal (§3) — a schema written against v2 needs that foreign key moved before it will take a v3 device's rows.
+`freezes.subgoal_id` points at a subgoal, not at a goal (§3) — a schema written against v2 needs that foreign key moved before it will take a v3 device's rows. `subgoals.area_id` is **nullable**: unfiled is a real state (§3), and a `not null` column would refuse the row rather than file it anywhere.
 
 Day-type columns (`date`, `created_at` on goals/subgoals, `achieved_on`, `start_date` / `repeat_until`, pause bounds) are Postgres `date`, never `timestamptz` — the §2 convention survives the round trip untouched. `subgoals.time` is a bare Postgres `time`, for the same reason: 07:30 means half seven wherever the phone is, not an instant that moves when it crosses a border.
 

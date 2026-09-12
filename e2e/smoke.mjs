@@ -65,8 +65,8 @@ await step('the day screen renders, and it is the habit screen', async () => {
   await page.waitForSelector('h1', { timeout: 8000 })
   const h = await page.textContent('h1')
   if (h.trim() !== 'Today') throw new Error(`h1 was "${h}"`)
-  if (!(await page.$('.add-task'))) throw new Error('no Add habit button')
-  if (!(await page.textContent('.add-task')).includes('habit')) {
+  if (!(await page.$('.fab'))) throw new Error('no floating add button')
+  if ((await page.getAttribute('.fab', 'aria-label')) !== 'Add habit') {
     throw new Error('the day screen does not offer to add a habit')
   }
 })
@@ -95,7 +95,10 @@ await step('a task belongs to an area and to nothing else', async () => {
   const { subgoals, goals, freezes } = await readStores(['subgoals', 'goals', 'freezes'])
   for (const task of subgoals) {
     if ('goal_id' in task) throw new Error(`task ${task.id} still carries goal_id`)
-    if (!task.area_id) throw new Error(`task ${task.id} has no area`)
+    // An area is optional — null is unfiled (§3) — but the column must exist,
+    // and it must never be the zero that is not an area.
+    if (task.area_id === undefined) throw new Error(`task ${task.id} lost its area column`)
+    if (task.area_id === 0) throw new Error(`task ${task.id} was filed under area zero`)
   }
   // A goal is an aim: no importance, no tasks, and a status of its own.
   for (const goal of goals) {
@@ -129,6 +132,36 @@ await step('a paused habit is absent from the day', async () => {
 await step('archived task is absent from the list entirely', async () => {
   const body = await page.textContent('.screen')
   if (body.includes('Old warm-up routine')) throw new Error('archived task leaked')
+})
+
+await step('the day is headed by the day, and the rows carry their area', async () => {
+  const heads = await page.$$eval('.day-head', (n) => n.map((x) => x.textContent.trim()))
+  if (!heads[0] || !heads[0].includes('Today')) throw new Error(`first heading: ${heads[0]}`)
+  // The area moved onto the row when the day became the heading (§6).
+  const meta = await page.textContent('.card .row .row-meta')
+  if (!meta.trim()) throw new Error('a habit row carries no area or cadence')
+})
+
+await step('"not due today" opens into the days ahead, and skips the empty ones', async () => {
+  await page.click('.section-toggle')
+  await page.waitForTimeout(200)
+  const heads = await page.$$eval('.day-head', (n) => n.map((x) => x.textContent.trim()))
+  // Today, then at least one day ahead — each one a real date with a weekday.
+  const ahead = heads.slice(1).filter((h) => h !== 'Later')
+  if (ahead.length === 0) throw new Error(`no days ahead: ${heads}`)
+  // A date and a weekday, in whatever order the reader's locale puts them.
+  for (const head of ahead) {
+    if (!/\d/.test(head) || !head.includes(' · ')) {
+      throw new Error(`heading is not a day: "${head}"`)
+    }
+  }
+  if (new Set(ahead).size !== ahead.length) throw new Error(`a day was headed twice: ${ahead}`)
+  // A rare cadence still gets a line rather than vanishing off the window.
+  const body = await page.textContent('.screen')
+  if (!body.includes('Quarterly tax check')) throw new Error('a rare habit vanished')
+  if (!body.includes('Sunday call')) throw new Error('a paused habit vanished')
+  await page.click('.section-toggle')
+  await page.waitForTimeout(200)
 })
 
 await step('ticking a habit updates progress', async () => {
@@ -196,9 +229,12 @@ await step('the to-do screen lists to-dos only, in deadline piles', async () => 
   if (!body.includes('Book a physio appointment')) throw new Error('overdue to-do missing')
   if (!body.includes('Renew the passport')) throw new Error('undated to-do missing')
   if (body.includes('Gym session')) throw new Error('a habit leaked into the to-do list')
-  const sections = await page.$$eval('.section-label', (n) => n.map((x) => x.textContent.trim()))
-  if (!sections.some((s) => s.startsWith('Overdue'))) throw new Error(`sections: ${sections}`)
-  if (!sections.some((s) => s.startsWith('No date'))) throw new Error(`sections: ${sections}`)
+  const sections = await page.$$eval('.day-head', (n) => n.map((x) => x.textContent.trim()))
+  // The heading is the deadline itself; "Overdue" is a word on the day rather
+  // than a pile of its own, and a day nothing is due on gets no heading (§6).
+  if (!sections.some((s) => s.endsWith('Overdue'))) throw new Error(`sections: ${sections}`)
+  if (!sections.some((s) => s === 'No date')) throw new Error(`sections: ${sections}`)
+  if (!(await page.$('.day-head.is-late'))) throw new Error('a late day is not marked')
 })
 
 await step('the tab badge counts what is overdue', async () => {
@@ -209,14 +245,14 @@ await step('the tab badge counts what is overdue', async () => {
 await step('a to-do ticked stays on the list, marked finished', async () => {
   await page.click('.row:has-text("Renew the passport") .check:not(.cross)')
   await page.waitForTimeout(500)
-  const sections = await page.$$eval('.section-label', (n) => n.map((x) => x.textContent.trim()))
+  const sections = await page.$$eval('.day-head', (n) => n.map((x) => x.textContent.trim()))
   if (!sections.some((s) => s.startsWith('Finished'))) throw new Error(`sections: ${sections}`)
   await page.click('.row:has-text("Renew the passport") .check:not(.cross)')
   await page.waitForTimeout(400)
 })
 
 await step('adding from the to-do screen writes a to-do, not a habit', async () => {
-  await page.click('.add-task')
+  await page.click('.fab')
   await page.waitForSelector('.composer-input')
   const pressed = await page.getAttribute('.kindswitch-btn:has-text("To-do")', 'aria-pressed')
   if (pressed !== 'true') throw new Error('the to-do screen did not open on To-do')
@@ -231,7 +267,7 @@ await step('adding from the to-do screen writes a to-do, not a habit', async () 
 
 await step('adding from the day screen writes a habit, not a to-do', async () => {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.add-task')
+  await page.click('.fab')
   await page.waitForSelector('.composer-input')
   const pressed = await page.getAttribute('.kindswitch-btn:has-text("Habit")', 'aria-pressed')
   if (pressed !== 'true') throw new Error('the day screen did not open on Habit')
@@ -246,6 +282,8 @@ await step('adding from the day screen writes a habit, not a to-do', async () =>
   if (stored.cadence_type !== 'weekly') throw new Error(`cadence ${stored.cadence_type}`)
   if (stored.days.length !== 7) throw new Error(`days ${JSON.stringify(stored.days)}`)
   if (stored.due_date != null) throw new Error('a habit must not carry a deadline')
+  // No area unless one is chosen: the star is opted into, never defaulted (§7).
+  if (stored.area_id != null) throw new Error(`a new task defaulted into area ${stored.area_id}`)
 })
 
 await step('the switch turns one into the other, and only touches the repeat', async () => {
@@ -260,7 +298,7 @@ await step('the switch turns one into the other, and only touches the repeat', a
   const stored = subgoals.find((s) => s.title === 'Morning walk')
   if (stored.cadence_type !== 'once') throw new Error(`cadence ${stored.cadence_type}`)
   if (stored.importance !== 'low') throw new Error('the switch moved the priority')
-  if (stored.area_id !== 1) throw new Error('the switch moved the area')
+  if (stored.area_id != null) throw new Error('the switch moved the area')
 })
 
 // ---------------------------------------------------------------------------
@@ -269,7 +307,7 @@ await step('the switch turns one into the other, and only touches the repeat', a
 
 await step('the repeat sheet has a way back to the date sheet', async () => {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.add-task')
+  await page.click('.fab')
   await page.waitForSelector('.composer-input')
   await page.click('.composer-chips .chip:nth-child(2)')
   await page.waitForSelector('.cal')
@@ -283,16 +321,21 @@ await step('the repeat sheet has a way back to the date sheet', async () => {
 })
 
 await step('the area picker offers areas and nothing under them', async () => {
-  await page.click('.add-task')
+  await page.click('.fab')
   await page.fill('.composer-input', 'Call the bank p1')
   const typed = await page.inputValue('.composer-input')
   if (typed !== 'Call the bank') throw new Error(`the p1 token was not consumed: "${typed}"`)
   if (!(await page.$('.chip.imp-high'))) throw new Error('p1 did not set the priority')
+  if ((await page.textContent('.composer-chips .chip:first-child')).trim() !== 'Area') {
+    throw new Error('the composer opened already filed under an area')
+  }
   await page.click('.composer-chips .chip:first-child')
   await page.waitForSelector('.sheet-row:has-text("Money")')
   const body = await page.textContent('.sheet')
   if (body.includes('Create new goal')) throw new Error('the goal tier is still in the picker')
   if (body.includes('only')) throw new Error('the picker still has a second level')
+  // Unfiled is an answer the sheet offers, not the absence of one (§3).
+  if (!body.includes('No area')) throw new Error('the picker cannot leave a task unfiled')
   await page.click('.sheet-row:has-text("Money")')
   await page.waitForSelector('.sheet', { state: 'detached' })
   await page.click('.composer-submit')
@@ -305,7 +348,7 @@ await step('the area picker offers areas and nothing under them', async () => {
 
 await step('a repeat picked from the date sheet stores Monday-first weekdays', async () => {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.add-task')
+  await page.click('.fab')
   await page.fill('.composer-input', 'Sailing lesson')
   await page.click('.composer-chips .chip:nth-child(2)')
   await page.waitForSelector('.cal')
@@ -329,7 +372,7 @@ await step('a repeat picked from the date sheet stores Monday-first weekdays', a
 
 await step('a custom repeat stores its interval and its inclusive end date', async () => {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.add-task')
+  await page.click('.fab')
   await page.fill('.composer-input', 'Deep clean')
   await page.click('.composer-chips .chip:nth-child(2)')
   await page.waitForSelector('.cal')
@@ -354,7 +397,7 @@ await step('a custom repeat stores its interval and its inclusive end date', asy
 
 await step('the date sheet stays open on a pick, and marks the day', async () => {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-  await page.click('.add-task')
+  await page.click('.fab')
   await page.fill('.composer-input', 'Sheet stays open')
   await page.click('.composer-chips .chip:nth-child(2)')
   await page.waitForSelector('.cal')
@@ -496,6 +539,25 @@ await step('a goal is written inline, and reaching it is one tap', async () => {
   if (!stored.achieved_on) throw new Error('reaching a goal did not date it')
   const body = await page.textContent('.screen')
   if (!body.includes('Reached')) throw new Error('no reached section')
+})
+
+await step('a goal description has a button that saves it', async () => {
+  await page.click('.goal-row:has-text("Touch my toes") .goal-title')
+  await page.waitForSelector('.goal-body')
+  // Nothing typed yet, so there is nothing to save — the button says so
+  // rather than disappearing and reappearing under the thumb (§7).
+  if (await page.isEnabled('.goal-save')) throw new Error('Save is live with nothing to save')
+  await page.fill('.goal-body .textarea', 'Palms flat, knees straight.')
+  if (!(await page.isEnabled('.goal-save'))) throw new Error('typing did not offer a Save')
+  await page.click('.goal-save')
+  await page.waitForTimeout(600)
+  const { goals } = await readStores(['goals'])
+  const stored = goals.find((g) => g.title === 'Touch my toes')
+  if (stored.description !== 'Palms flat, knees straight.') {
+    throw new Error(`description stored as "${stored.description}"`)
+  }
+  if (await page.isEnabled('.goal-save')) throw new Error('Save stayed live after saving')
+  await page.click('.goal-row:has-text("Touch my toes") .goal-title')
 })
 
 await step('removing a goal leaves every habit in the area alone', async () => {

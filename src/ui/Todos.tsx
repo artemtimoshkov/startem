@@ -1,25 +1,25 @@
 /** View 2 — the to-do list (SPEC.md §6). */
 
 import { useState } from 'react'
-import { buildTodos, noRepeat, type TodoBucket } from '../core'
+import { buildTodos, noRepeat, type TodoSection } from '../core'
 import { useSnapshot } from './DataContext'
-import { Plus, TopBar } from './bits'
+import { Fab, TopBar, dayHeading } from './bits'
 import { TaskComposer } from './TaskComposer'
 import { TodoLine } from './Today'
 
 /**
- * The five piles a to-do can be in, and what each is called on screen.
+ * The heading over a run of to-dos.
  *
- * They are not folders and nothing is filed into them: the pile is read off
- * the deadline every time the list is built (§6), so a to-do moves from
- * Upcoming to Today to Overdue on its own, overnight, with nothing to tidy.
+ * A dated section is headed by its day, which is the only thing the list is
+ * ordered by; "Overdue" is a word on the day rather than a pile of its own,
+ * because a pile hid *when*. The two runs with no day — undated and finished —
+ * keep a name, since there is no date to print.
  */
-const BUCKET_TITLE: Record<TodoBucket, string> = {
-  overdue: 'Overdue',
-  today: 'Today',
-  upcoming: 'Upcoming',
-  someday: 'No date',
-  done: 'Finished',
+function sectionTitle(section: TodoSection, today: string): string {
+  if (section.kind === 'someday') return 'No date'
+  if (section.kind === 'done') return 'Finished'
+  const heading = dayHeading(section.date!, today)
+  return section.overdue ? `${heading} · Overdue` : heading
 }
 
 export function TodosScreen() {
@@ -39,27 +39,22 @@ export function TodosScreen() {
           onSaved={() => setComposing(false)}
           onCancel={() => setComposing(false)}
         />
-      ) : (
-        <button type="button" className="add-task" onClick={() => setComposing(true)}>
-          <span className="add-task-plus">
-            <Plus size={15} />
-          </span>
-          Add to-do
-        </button>
-      )}
+      ) : null}
 
       {view.sections.map((section) => (
-        <div key={section.bucket}>
-          <p className={`section-label${section.bucket === 'overdue' ? ' is-late' : ''}`}>
-            {BUCKET_TITLE[section.bucket]} · {section.items.length}
+        <div key={`${section.kind}-${section.date ?? ''}`}>
+          <p className={`day-head${section.overdue ? ' is-late' : ''}`}>
+            {sectionTitle(section, today)}
           </p>
           <div className="card">
             {section.items.map((item) => (
-              <TodoLine key={item.subgoal_id} item={item} today={today} />
+              <TodoLine key={item.subgoal_id} item={item} today={today} hideDate />
             ))}
           </div>
         </div>
       ))}
+
+      {composing ? null : <Fab label="Add to-do" onClick={() => setComposing(true)} />}
     </div>
   )
 }

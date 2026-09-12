@@ -12,6 +12,7 @@
 
 import { useState } from 'react'
 import {
+  areaOf,
   buildHabitGrid,
   habitRate,
   habitStreak,
@@ -40,7 +41,7 @@ export function TaskScreen({ taskId }: { taskId: number }) {
     )
   }
 
-  const area = index.areaById.get(task.area_id)
+  const area = areaOf(index, task)
   const habit = isHabit(task)
   const paused = isPaused(index, task)
   const periods = (index.freezesBySubgoal.get(task.id) ?? []).filter((f) => !f.deleted)

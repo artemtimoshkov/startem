@@ -11,6 +11,7 @@ import {
   normaliseSubgoal,
 } from './rows'
 import { isScheduled } from './score'
+import { buildIndex } from './state'
 
 const TODAY = '2026-08-26'
 
@@ -171,6 +172,27 @@ describe('importing a JSON export', () => {
     const s = normaliseSnapshot(exported, TODAY)
     expect(s.subgoals[0]!.area_id).toBe(3)
     expect('goal_id' in s.subgoals[0]!).toBe(false)
+  })
+
+  /**
+   * A row that names no area is unfiled, not filed onto area zero — which is
+   * not an area, and used to make the task disappear from every list (§3).
+   */
+  it('reads a task with no area at all as unfiled', () => {
+    const s = normaliseSnapshot(
+      { subgoals: [{ id: 1, title: 'Stretch', cadence_type: 'daily' }] },
+      TODAY,
+    )
+    expect(s.subgoals[0]!.area_id).toBeNull()
+    expect(buildIndex(s, TODAY).unfiled.map((t) => t.id)).toEqual([1])
+  })
+
+  it('reads an explicit null area as unfiled rather than repairing it', () => {
+    const s = normaliseSnapshot(
+      { subgoals: [{ id: 1, area_id: null, title: 'Stretch', cadence_type: 'daily' }] },
+      TODAY,
+    )
+    expect(s.subgoals[0]!.area_id).toBeNull()
   })
 
   it("re-points a goal's pause onto the habits it was actually pausing", () => {

@@ -14,6 +14,7 @@ import {
   buildCalendar,
   buildDayDetail,
   buildHabitGrid,
+  buildAgenda,
   buildIndex,
   buildStar,
   buildToday,
@@ -88,21 +89,46 @@ function withTodo(over: Partial<import('./types').Subgoal> = {}) {
 }
 
 describe("Today's list", () => {
-  it('lists every habit due today, heaviest first, grouped by area', () => {
+  it('lists every habit due today, heaviest first, in one flat list', () => {
     const view = buildToday(twoAreas(), TODAY)
     expect(view.items.map((i) => i.title)).toEqual(['Gym', 'Deep work'])
     expect(view.items.map((i) => i.weight)).toEqual([4, 1])
-    expect(view.groups.map((g) => g.areaName)).toEqual(['Health', 'Work'])
+    expect(view.items.map((i) => i.areaName)).toEqual(['Health', 'Work'])
   })
 
-  it('groups in the order the groups first appear, which follows the sort', () => {
-    // Work carries the heavier habit here, so its group must come first even
-    // though Health sits earlier on the chart.
+  it('puts the heaviest first whatever area it is on', () => {
+    // Work carries the heavier habit here, so it leads even though Health
+    // sits earlier on the chart.
     const s = twoAreas()
     s.subgoals[0]!.importance = 'low'
     s.subgoals[1]!.importance = 'high'
+    expect(buildToday(s, TODAY).items.map((i) => i.title)).toEqual(['Deep work', 'Gym'])
+  })
+
+  /**
+   * An unfiled task is a first-class task everywhere but the star: it is due,
+   * it is listed, it is ticked — and nothing scores it (§3, §5).
+   */
+  it('lists an unfiled habit, and sorts it after every filed one of its weight', () => {
+    const s = twoAreas()
+    s.subgoals.push(
+      subgoal({
+        id: 7,
+        area_id: null,
+        title: 'Stretch',
+        importance: 'low',
+        cadence_type: 'weekly',
+        days: [2],
+      }),
+    )
     const view = buildToday(s, TODAY)
-    expect(view.groups.map((g) => g.areaName)).toEqual(['Work', 'Health'])
+    expect(view.items.map((i) => i.title)).toEqual(['Gym', 'Deep work', 'Stretch'])
+    const loose = view.items.find((i) => i.title === 'Stretch')!
+    expect(loose.area_id).toBeNull()
+    expect(loose.areaName).toBeNull()
+    // It is due and counted on the day, and on no spoke of the star.
+    expect(view.total).toBe(3)
+    expect(buildStar(s, TODAY).vertices.every((v) => v.habitCount < 3)).toBe(true)
   })
 
   it('reports progress as done of (total − crossed out)', () => {
@@ -172,11 +198,14 @@ describe('the to-do list', () => {
       subgoal({ id: 6, area_id: 2, title: 'Whenever', cadence_type: 'once', due_date: null }),
     )
     const view = buildTodos(s, TODAY)
-    expect(view.sections.map((sec) => sec.bucket)).toEqual([
-      'overdue',
-      'today',
-      'upcoming',
-      'someday',
+    // The piles still exist on the item, and the *sections* are days: one per
+    // deadline, oldest first, and never a day nothing is due on (§6).
+    expect(view.items.map((i) => i.bucket)).toEqual(['overdue', 'today', 'upcoming', 'someday'])
+    expect(view.sections.map((sec) => [sec.kind, sec.date, sec.overdue])).toEqual([
+      ['date', '2026-08-20', true],
+      ['date', TODAY, false],
+      ['date', '2026-09-05', false],
+      ['someday', null, false],
     ])
     expect(view.items.map((i) => i.title)).toEqual(['Late', 'Now', 'Soon', 'Whenever'])
     expect(view.openCount).toBe(4)
@@ -214,6 +243,98 @@ describe('the to-do list', () => {
       checkin({ subgoal_id: 4, date: addDays(TODAY, -1), status: 'done' }),
     ]
     expect(buildTodos(s, TODAY).items.map((i) => i.title)).toEqual(['Newer', 'Older'])
+  })
+
+  it('puts two to-dos sharing a deadline under one heading', () => {
+    const s = twoAreas()
+    s.subgoals.push(
+      subgoal({ id: 3, area_id: 1, title: 'A', cadence_type: 'once', due_date: TODAY }),
+      subgoal({ id: 4, area_id: 2, title: 'B', cadence_type: 'once', due_date: TODAY }),
+    )
+    const view = buildTodos(s, TODAY)
+    expect(view.sections).toHaveLength(1)
+    expect(view.sections[0]!.items.map((i) => i.title)).toEqual(['A', 'B'])
+  })
+
+  it('lists an unfiled to-do with no area name at all', () => {
+    const s = twoAreas()
+    s.subgoals.push(
+      subgoal({ id: 3, area_id: null, title: 'Loose end', cadence_type: 'once', due_date: TODAY }),
+    )
+    const item = buildTodos(s, TODAY).items[0]!
+    expect(item.title).toBe('Loose end')
+    expect(item.area_id).toBeNull()
+    expect(item.areaName).toBeNull()
+  })
+})
+
+/**
+ * §6 — what "Not due today" opens into. The rules that matter here are that a
+ * day nothing lands on is not a heading, that today is never repeated, and
+ * that a habit too rare (or too paused) for the window is still listed once.
+ */
+describe('the agenda', () => {
+  it('groups the days ahead, and skips the days with nothing on them', () => {
+    const s = twoAreas() // both habits are weekly on Wednesday
+    const view = buildAgenda(s, TODAY, 14)
+    expect(view.from).toBe(addDays(TODAY, 1))
+    expect(view.to).toBe(addDays(TODAY, 14))
+    expect(view.days.map((d) => d.date)).toEqual([addDays(TODAY, 7), addDays(TODAY, 14)])
+    expect(view.days[0]!.items.map((i) => i.title)).toEqual(['Gym', 'Deep work'])
+  })
+
+  it('never repeats today — that is the list above it', () => {
+    const view = buildAgenda(twoAreas(), TODAY, 14)
+    expect(view.days.some((d) => d.date === TODAY)).toBe(false)
+    // Both habits are due today, so neither is "not due today".
+    expect(view.habitCount).toBe(0)
+    expect(view.later).toEqual([])
+  })
+
+  it('counts the habits not due today, and lists the rare ones under Later', () => {
+    const s = twoAreas()
+    s.subgoals.push(
+      subgoal({
+        id: 3,
+        area_id: 1,
+        title: 'Tax check',
+        cadence_type: 'quarterly',
+        monthly_day: 5,
+      }),
+    )
+    const view = buildAgenda(s, TODAY, 14)
+    expect(view.habitCount).toBe(1)
+    expect(view.later.map((i) => i.title)).toEqual(['Tax check'])
+    expect(view.days.some((d) => d.items.some((i) => i.title === 'Tax check'))).toBe(false)
+  })
+
+  it('sends a paused habit to Later, and says it is paused', () => {
+    const s = twoAreas()
+    s.freezes = [freeze({ subgoal_id: 1, start_date: '2026-08-01', end_date: null })]
+    const view = buildAgenda(s, TODAY, 14)
+    expect(view.later.map((i) => [i.title, i.paused])).toEqual([['Gym', true]])
+  })
+
+  it('carries the area on the row, and null when there is none', () => {
+    const s = twoAreas()
+    s.subgoals.push(
+      subgoal({
+        id: 3,
+        area_id: null,
+        title: 'Stretch',
+        cadence_type: 'weekly',
+        days: [3], // the Thursday after TODAY
+      }),
+    )
+    const view = buildAgenda(s, TODAY, 14)
+    const thursday = view.days.find((d) => d.date === addDays(TODAY, 1))!
+    expect(thursday.items.map((i) => [i.title, i.areaName])).toEqual([['Stretch', null]])
+  })
+
+  it('never walks past the window it was given', () => {
+    const view = buildAgenda(twoAreas(), TODAY, 3)
+    expect(view.days).toEqual([])
+    expect(view.to).toBe(addDays(TODAY, 3))
   })
 })
 
