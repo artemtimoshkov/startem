@@ -1185,3 +1185,82 @@ a { color: var(--accent); text-decoration: none; }
 .stat .num { font-size: clamp(17px, 5vw, 22px); }
 .stat-note { margin: 14px 0 0; font-size: 13.5px; color: var(--text-secondary); }
 
+
+/* ------------------------------------------------------ sync, account -- */
+/* §10's one visible trace. Quiet when everything is fine; a word only when
+   there is something to act on. */
+
+.sync-badge {
+  position: fixed;
+  right: var(--gutter);
+  bottom: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 10px);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-1);
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  /* A double-tap near a control must tick it, not zoom the page (§12). */
+  touch-action: manipulation;
+}
+.sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-tertiary); }
+.sync-synced .sync-dot { background: var(--imp-low); }
+.sync-syncing .sync-dot { background: var(--accent); }
+.sync-offline .sync-dot { background: var(--imp-medium); }
+/* The two that must never be mistaken for working. */
+.sync-error .sync-dot, .sync-signed-out .sync-dot { background: var(--imp-high); }
+.sync-error, .sync-signed-out { color: var(--text); border-color: var(--hairline-strong); }
+
+.prose { margin: 0 0 14px; font-size: 14.5px; line-height: 1.5; color: var(--text-secondary); }
+.prose.dim { color: var(--text-tertiary); font-size: 13px; }
+.prose.warn { color: var(--imp-high); }
+.prose code {
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--sunken);
+  color: var(--text-secondary);
+}
+
+.stack { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.stack input {
+  /* 16px minimum, or iOS zooms the page the instant the field takes focus and
+     never zooms back (§12). */
+  font: inherit;
+  font-size: 16px;
+  padding: 12px 14px;
+  border-radius: var(--r-default);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+.stack button {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: var(--r-default);
+  background: var(--accent);
+  color: #fff;
+  touch-action: manipulation;
+}
+.stack button:disabled { opacity: 0.45; }
+.stack .btn-quiet { background: var(--sunken); color: var(--text-secondary); }
+
+.rows { margin: 0 0 18px; display: flex; flex-direction: column; gap: 1px; }
+.rows > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.rows dt { font-size: 14px; color: var(--text-secondary); }
+.rows dd { margin: 0; font-size: 14px; color: var(--text); text-align: right; overflow-wrap: anywhere; }

@@ -584,6 +584,9 @@ on app open, on regaining network, and after each write (debounced):
 ```
 
 - **Last-write-wins** by `updated_at` is the entire conflict policy. For one person's habit data, the newer edit is simply the right one. This is exactly why ids are minted per device (§3): last-write-wins on a colliding primary key does not merge two rows safely, it destroys one of them.
+- **The first sign-in is the exception to push-first.** A fresh install seeds ten default areas (§7) and queues them like any other write. Pushing those before the first pull puts defaults minted seconds ago into an account holding a year of real ones — and last-write-wins, comparing honestly, then prefers the defaults. So a device that has *never completed a pull* and holds **no tasks and no check-ins** adopts the cloud instead: it pulls first, drops its seeds, and pushes from the next run on. A device that was used offline before signing in is not in that state and merges normally, so work done on a plane still reaches the cloud. The question is asked once and recorded, not inferred from the watermark — an account with nothing in it yet leaves the watermark untouched and would otherwise look like a first sign-in forever.
+- **The cloud has no foreign keys.** The device is the source of truth and already enforces every relationship; Postgres is a sync target. A push that arrived a moment before the row it references would fail an FK check and wedge that entry in the outbox with nothing to do about it — trading a real, recurring failure for a theoretical one. Push order (areas, then goals and tasks, then check-ins and periods) keeps the data coherent anyway.
+- **Each pull re-reads a window either side of its watermark.** Re-applying an unchanged row is a no-op, so the overlap is free; without it, a row written in the moment between the query running and the watermark advancing is never fetched again and the two devices sit quietly out of step.
 - Sync runs in the background. Nothing in the interface ever waits on it — the only visible trace is a small "synced / pending / offline" indicator.
 - The outbox lives in IndexedDB alongside the data, so changes made across several offline days all push when the network returns.
 
@@ -644,6 +647,8 @@ No monorepo, no workspaces — one `package.json`, one install, one build. The �
 3. **Install it.** Manifest + service worker; deploy to Vercel; Add to Home Screen on the iPhone; verify it opens in airplane mode.
 4. **Cloud.** Supabase schema, RLS, magic-link login screen.
 5. **Sync.** Outbox, push/pull, tombstones, the sync indicator. Test the two-device case: phone and laptop editing the same day offline.
+
+   The outbox is a sixth Dexie store, added at v4 and deliberately *not* one of the five tables — it never syncs, it is per-device bookkeeping. Its key is `table:pk`, so repeated edits of one row collapse onto one entry and push reads the current row at send time rather than replaying a log. Every mutation in `repo` goes through a helper that writes the row and queues it **in the same transaction**: queueing outside it would let the data commit while the entry was lost, and a row that changes locally but never reaches the outbox is one the other device never sees, with nothing anywhere to report it.
 6. **Polish.** Update toast, install instructions, PIN if still wanted.
 
 Milestone 2 already beats the current app; everything after it is durability. Total running cost on the free tiers of all three services: zero, at this scale.
@@ -675,6 +680,10 @@ Each of these cost real debugging the first time — plus three known ones added
 | **Number inputs and the mouse wheel** | Scrolling over a focused number field silently changes its value, and `max` does not prevent it. Validate at the storage boundary. |
 | **Cloudflare's proxy in front of Vercel** | Orange-clouding the record puts two certificate/caching layers in an argument — redirect loops and stale deploys. The record must be DNS-only. |
 | **Missing SPA rewrite on Vercel** | Deep links and refresh on any route but `/` return 404. One rewrite rule in `vercel.json` sends every path to `index.html`. |
+| **Comparing two timestamp formats as text** | `toISOString()` writes `Z`; Postgres writes an offset, and not always `+00:00`. Sorted as strings, a row from a `+02:00` connection outranks one written 49 minutes later, and last-write-wins hands the older edit the win. Compare instants — parse both sides. |
+| **A task pointing at an area that does not exist** | §6 drops it from every view, so it is still on the device and completely invisible, with nothing anywhere to say so — the failure mode that looks exactly like data loss without being it. Both early upgrades fell back to `area_id: 0`, and nothing is ever area 0. Fall back to a live area, and repair on upgrade. |
+| **Deleting a row instead of tombstoning it on untick** | A deleted row has nothing left to push. The other device keeps its tick and hands it back on the next pull, so the untick silently undoes itself. |
+| **A pulled row that re-enters the outbox** | The two devices push the same row back and forth forever. Sync's own writes must bypass the queueing path that local writes use. |
 | **Supabase free tier pauses idle projects** | A project untouched for about a week is paused until manually resumed; sync fails quietly meanwhile. Daily use keeps it warm — but the sync indicator must surface failures rather than swallow them. |
 
 ---

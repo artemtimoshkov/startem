@@ -10,13 +10,15 @@ import { TaskScreen } from './Task'
 import { AreaScreen } from './Area'
 import { StarScreen } from './Star'
 import { ServiceWorkerNotice } from './serviceWorker'
+import { SyncProvider, SyncBadge } from './SyncContext'
+import { AccountScreen } from './Account'
 import { buildTodos } from '../core'
 
 /**
  * Four routes and one detail route each for a task and an area. Goals have no
  * route at all any more: an aim is written and read inline on its area (§7).
  */
-const ROUTES = ['/', '/todos', '/tasks/:id', '/star', '/areas/:id']
+const ROUTES = ['/', '/todos', '/tasks/:id', '/star', '/areas/:id', '/account']
 
 function Screens() {
   const { loading, storageError } = useData()
@@ -54,6 +56,8 @@ function Screens() {
       return <StarScreen />
     case '/areas/:id':
       return <AreaScreen areaId={Number(hit.params['id'])} />
+    case '/account':
+      return <AccountScreen />
     // '/' and anything unrecognised: the day's list. A URL nobody can type on
     // a phone does not deserve a dead-end screen explaining itself.
     default:
@@ -141,11 +145,17 @@ export default function App() {
   return (
     <RouterProvider>
       <DataProvider>
-        <div className="app">
-          <Screens />
-        </div>
-        <TabBar />
-        <ServiceWorkerNotice />
+        <SyncProvider>
+          <div className="app">
+            <Screens />
+          </div>
+          <TabBar />
+          {/* Not a fourth tab: the three tabs are the three things the app is
+              (§8), and sync is plumbing. The badge stays out of the way until
+              it has something to say, and opens the account screen. */}
+          <SyncBadge />
+          <ServiceWorkerNotice />
+        </SyncProvider>
       </DataProvider>
     </RouterProvider>
   )
