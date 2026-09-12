@@ -8,7 +8,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { MAX_AREAS, buildIndex, buildStar, buildToday, isFrozenOn } from '../core'
-import { DEVICE_KEY_META, db } from './db'
+import { DEVICE_KEY_META, db, outboxKey } from './db'
 import {
   AreaLimitError,
   addArea,
@@ -65,6 +65,7 @@ async function wipe() {
     db.checkins.clear(),
     db.freezes.clear(),
     db.meta.clear(),
+    db.outbox.clear(),
   ])
 }
 
@@ -95,18 +96,38 @@ describe('check-ins', () => {
     expect(rows[0]!.status).toBe('skipped')
   })
 
+  // Clearing writes a tombstone rather than deleting the row (§10): a deleted
+  // row has nothing left to push, so the other device would keep its own tick
+  // and hand it straight back on the next pull. The core reads a tombstone as
+  // absent, so the day is unresolved either way.
   it('ticks, then clears back to unresolved on a second tick', async () => {
     await toggleDone(1, TODAY, null)
     expect((await db.checkins.get([1, TODAY]))?.status).toBe('done')
     await toggleDone(1, TODAY, 'done')
-    expect(await db.checkins.get([1, TODAY])).toBeUndefined()
+    expect((await db.checkins.get([1, TODAY]))?.deleted).toBe(true)
+    expect(buildIndex(await loadSnapshot(), TODAY).checkinsBySubgoal.get(1)?.get(TODAY)).toBe(
+      undefined,
+    )
   })
 
   it('crosses out, and restores to pending', async () => {
     await toggleSkipped(1, TODAY, null)
     expect((await db.checkins.get([1, TODAY]))?.status).toBe('skipped')
     await toggleSkipped(1, TODAY, 'skipped')
-    expect(await db.checkins.get([1, TODAY])).toBeUndefined()
+    expect((await db.checkins.get([1, TODAY]))?.deleted).toBe(true)
+    expect(buildIndex(await loadSnapshot(), TODAY).checkinsBySubgoal.get(1)?.get(TODAY)).toBe(
+      undefined,
+    )
+  })
+
+  it('re-ticking a cleared day revives the row rather than stacking a second', async () => {
+    await toggleDone(1, TODAY, null)
+    await toggleDone(1, TODAY, 'done')
+    await toggleDone(1, TODAY, null)
+    const rows = await db.checkins.toArray()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.status).toBe('done')
+    expect(rows[0]!.deleted).toBe(false)
   })
 
   it('switches straight from crossed out to ticked', async () => {
@@ -555,5 +576,157 @@ describe('id allocation', () => {
     const minted = await saveGoal({ area_id: 3, title: 'new', description: '' }, TODAY)
     expect(minted).toBeGreaterThan(2 ** 20)
     expect(await db.goals.get(41)).toBeDefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The outbox (§10)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every mutation has to leave an entry behind, because a row that changes
+ * locally and never reaches the outbox is a row the other device never sees —
+ * and nothing anywhere would report it. These are deliberately written against
+ * the *public* write API rather than the `put*` helpers: the point is that no
+ * route into the store can skip queueing, not that one helper works.
+ */
+describe('the outbox', () => {
+  const keys = async () => (await db.outbox.toArray()).map((q) => q.key).sort()
+
+  beforeEach(async () => {
+    await ensureSeeded()
+    await db.outbox.clear()
+  })
+
+  it('queues a task on save, and again on every later edit', async () => {
+    const id = await saveTask(draft({ title: 'Gym' }), TODAY)
+    expect(await keys()).toEqual([outboxKey('subgoals', id)])
+
+    await db.outbox.clear()
+    await archiveTask(id)
+    expect(await keys()).toEqual([outboxKey('subgoals', id)])
+
+    await db.outbox.clear()
+    await moveTask(id, 2)
+    expect(await keys()).toEqual([outboxKey('subgoals', id)])
+  })
+
+  it('queues a check-in under its compound key, tick and untick alike', async () => {
+    const id = await saveTask(draft(), TODAY)
+    await db.outbox.clear()
+
+    await setCheckin(id, TODAY, 'done')
+    expect(await keys()).toEqual([outboxKey('checkins', [id, TODAY])])
+
+    await db.outbox.clear()
+    await setCheckin(id, TODAY, null)
+    // The untick is a tombstone, so it is a row to push like any other.
+    expect(await keys()).toEqual([outboxKey('checkins', [id, TODAY])])
+  })
+
+  it('collapses repeated edits of one row onto a single entry', async () => {
+    const id = await saveTask(draft(), TODAY)
+    await db.outbox.clear()
+    await setCheckin(id, TODAY, 'done')
+    await setCheckin(id, TODAY, 'skipped')
+    await setCheckin(id, TODAY, null)
+    await setCheckin(id, TODAY, 'done')
+    // Push reads the current row, so the queue records which row changed, not
+    // how many times. Four edits, one thing to send.
+    expect(await keys()).toHaveLength(1)
+  })
+
+  it('queues goals through their whole life', async () => {
+    const id = await saveGoal({ area_id: 1, title: 'Bench 100 kg', description: '' }, TODAY)
+    expect(await keys()).toEqual([outboxKey('goals', id)])
+
+    await db.outbox.clear()
+    await setGoalStatus(id, 'achieved', TODAY)
+    expect(await keys()).toEqual([outboxKey('goals', id)])
+
+    await db.outbox.clear()
+    await deleteGoal(id)
+    expect(await keys()).toEqual([outboxKey('goals', id)])
+  })
+
+  it('queues areas on add, rename and reorder', async () => {
+    const id = await addArea('Reading')
+    expect(await keys()).toEqual([outboxKey('areas', id)])
+
+    await db.outbox.clear()
+    await renameArea(id, 'Books')
+    expect(await keys()).toEqual([outboxKey('areas', id)])
+
+    await db.outbox.clear()
+    await moveArea(id, -1)
+    // Both ends of the swap moved, so both have to go up.
+    expect((await keys()).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('queues a pause and its resumption', async () => {
+    const id = await saveTask(draft(), TODAY)
+    await db.outbox.clear()
+
+    await pauseTask(id, TODAY)
+    const paused = await db.outbox.toArray()
+    expect(paused.every((q) => q.table === 'freezes')).toBe(true)
+    expect(paused).toHaveLength(1)
+
+    await db.outbox.clear()
+    await resumeTask(id, TODAY)
+    expect((await db.outbox.toArray()).every((q) => q.table === 'freezes')).toBe(true)
+  })
+
+  it('queues everything an area removal touches, tombstones included', async () => {
+    const id = await addArea('Temporary')
+    const task = await saveTask(draft({ area_id: id }), TODAY)
+    const goal = await saveGoal({ area_id: id, title: 'Aim', description: '' }, TODAY)
+    await db.outbox.clear()
+
+    await deleteArea(id)
+    const queued = await keys()
+    expect(queued).toContain(outboxKey('areas', id))
+    expect(queued).toContain(outboxKey('subgoals', task))
+    expect(queued).toContain(outboxKey('goals', goal))
+  })
+
+  it('queues the seeded areas, so a second device is not left with orphans', async () => {
+    await wipe()
+    await ensureSeeded()
+    const queued = await db.outbox.toArray()
+    expect(queued).toHaveLength((await db.areas.count()))
+    expect(queued.every((q) => q.table === 'areas')).toBe(true)
+  })
+
+  it('queues every row an import writes, and drops the stale queue first', async () => {
+    await setCheckin(1, TODAY, 'done')
+    const before = await db.outbox.count()
+    expect(before).toBeGreaterThan(0)
+
+    const result = await importSnapshot(
+      {
+        areas: [{ id: 1, name: 'Health', position: 0 }],
+        goals: [],
+        subgoals: [],
+        checkins: [],
+        freezes: [],
+      },
+      TODAY,
+    )
+    const queued = await db.outbox.toArray()
+    expect(queued).toHaveLength(result.areas)
+    expect(queued[0]!.key).toBe(outboxKey('areas', 1))
+  })
+
+  it('counts a fresh install as pristine, and a used one as not', async () => {
+    const { isPristine } = await import('./repo')
+    await wipe()
+    await ensureSeeded()
+    // Ten default areas and nothing else: nothing here is worth defending
+    // against the cloud on first sign-in.
+    expect(await isPristine()).toBe(true)
+
+    await saveTask(draft(), TODAY)
+    expect(await isPristine()).toBe(false)
   })
 })

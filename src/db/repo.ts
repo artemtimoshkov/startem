@@ -13,9 +13,11 @@ import {
   MAX_AREAS,
   MIN_AREAS,
   type Area,
+  type Checkin,
   type CheckinStatus,
   type ClockTime,
   type Freeze,
+  type Goal,
   type GoalStatus,
   type ISODate,
   type Importance,
@@ -26,11 +28,60 @@ import {
   todayISO,
 } from '../core'
 import sampleExport from '../../migration/sample-export.json'
-import { db, newId, reserveIds } from './db'
+import { db, newId, outboxKey, reserveIds, type OutboxRow, type SyncTable } from './db'
 
 /** Set on every write, so §10's last-write-wins has something to order by. */
 function stamp(): string {
   return new Date().toISOString()
+}
+
+// ---------------------------------------------------------------------------
+// The outbox (§10)
+// ---------------------------------------------------------------------------
+
+/**
+ * Queues one row for push.
+ *
+ * Every mutation below goes through the `put*` helpers rather than touching a
+ * Dexie table directly, so that queueing cannot be forgotten by a later edit —
+ * a row that changes locally and never reaches the outbox is a row the other
+ * device never sees, and nothing anywhere would report it.
+ *
+ * The entry is written *inside the caller's transaction*, which is why each of
+ * those transactions lists `db.outbox` in its scope. Queueing outside it would
+ * let the data commit while the entry was lost.
+ */
+function entry(table: SyncTable, pk: number | [number, string]): OutboxRow {
+  return { key: outboxKey(table, pk), table, pk, queued_at: stamp() }
+}
+
+async function queue(table: SyncTable, pk: number | [number, string]): Promise<void> {
+  await db.outbox.put(entry(table, pk))
+}
+
+async function putArea(row: Area): Promise<void> {
+  await db.areas.put(row)
+  await queue('areas', row.id)
+}
+
+async function putGoal(row: Goal): Promise<void> {
+  await db.goals.put(row)
+  await queue('goals', row.id)
+}
+
+async function putSubgoal(row: Subgoal): Promise<void> {
+  await db.subgoals.put(row)
+  await queue('subgoals', row.id)
+}
+
+async function putCheckin(row: Checkin): Promise<void> {
+  await db.checkins.put(row)
+  await queue('checkins', [row.subgoal_id, row.date])
+}
+
+async function putFreeze(row: Freeze): Promise<void> {
+  await db.freezes.put(row)
+  await queue('freezes', row.id)
 }
 
 // ---------------------------------------------------------------------------
@@ -53,19 +104,41 @@ export async function loadSnapshot(): Promise<Snapshot> {
   return { areas, goals, subgoals, checkins, freezes }
 }
 
-/** Seeds the ten default areas on a fresh install. Idempotent. */
+/**
+ * Seeds the ten default areas on a fresh install. Idempotent.
+ *
+ * The seeds are queued for push like any other write: a task carries only its
+ * `area_id`, so an area that never reaches the cloud leaves every task that
+ * points at it stranded on the *other* device — visible here, invisible there.
+ *
+ * A device that seeds and then signs in to an account that already has areas
+ * does not fight over them: `pull` adopts the cloud wholesale when the store
+ * holds no tasks and no history, which is exactly the state a fresh install is
+ * in. See `isPristine` below.
+ */
 export async function ensureSeeded(): Promise<void> {
-  const count = await db.areas.count()
-  if (count > 0) return
-  await db.areas.bulkPut(
-    DEFAULT_AREAS.map((name, i) => ({
-      id: i + 1,
-      name,
-      position: i,
-      updated_at: stamp(),
-      deleted: false,
-    })),
-  )
+  await db.transaction('rw', db.areas, db.outbox, async () => {
+    const count = await db.areas.count()
+    if (count > 0) return
+    for (const [i, name] of DEFAULT_AREAS.entries()) {
+      await putArea({ id: i + 1, name, position: i, updated_at: stamp(), deleted: false })
+    }
+  })
+}
+
+/**
+ * True when the device has nothing of its own worth keeping — no tasks and no
+ * check-ins, whatever areas may be sitting there.
+ *
+ * This is the test `pull` uses to decide whether signing in should *adopt* the
+ * cloud or *merge* with it. A fresh install is pristine, so its ten seeded
+ * areas give way to the real ones instead of last-write-wins overwriting a
+ * year of renamed areas with defaults minted seconds ago. A device that was
+ * used offline before signing in is not pristine, and merges normally.
+ */
+export async function isPristine(): Promise<boolean> {
+  const [tasks, checkins] = await Promise.all([db.subgoals.count(), db.checkins.count()])
+  return tasks === 0 && checkins === 0
 }
 
 // ---------------------------------------------------------------------------
@@ -75,20 +148,31 @@ export async function ensureSeeded(): Promise<void> {
 /**
  * Writes, changes or clears one day's check-in.
  *
- * `null` clears the row back to unresolved. Locally that is a real delete —
- * there is no other device to tell yet — but §10 turns the same call into a
- * tombstone, because "untick" has to propagate.
+ * `null` clears the row back to unresolved, written as a **tombstone** rather
+ * than a delete so the clearing can propagate (§10). The core reads a
+ * tombstoned row as absent, so "no row" and "tombstoned row" mean the same
+ * thing to every rule in §5 and §6.
  */
 export async function setCheckin(
   subgoal_id: number,
   date: ISODate,
   status: CheckinStatus | null,
 ): Promise<void> {
-  if (status == null) {
-    await db.checkins.delete([subgoal_id, date])
-    return
-  }
-  await db.checkins.put({ subgoal_id, date, status, updated_at: stamp(), deleted: false })
+  await db.transaction('rw', db.checkins, db.outbox, async () => {
+    if (status == null) {
+      // Clearing a tick is a *tombstone*, never a row deletion. A deleted row
+      // has nothing left to push, so the other device would keep its own tick
+      // and hand it back on the next pull — the untick would silently undo
+      // itself. §10 says this in one line: "untick is not a row deletion on
+      // the wire". `live()` in the core already treats a tombstone as absent,
+      // so nothing downstream can tell the difference.
+      const existing = await db.checkins.get([subgoal_id, date])
+      if (!existing) return
+      await putCheckin({ ...existing, updated_at: stamp(), deleted: true })
+      return
+    }
+    await putCheckin({ subgoal_id, date, status, updated_at: stamp(), deleted: false })
+  })
 }
 
 /** Ticking an item writes `done`; ticking again clears it back to unresolved. */
@@ -130,7 +214,7 @@ export interface GoalDraft {
 
 /** Creates or updates a goal. Returns its id. */
 export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<number> {
-  return db.transaction('rw', db.goals, db.meta, async () => {
+  return db.transaction('rw', db.goals, db.meta, db.outbox, async () => {
     const now = stamp()
     const existing = draft.id == null ? undefined : await db.goals.get(draft.id)
     const goalId = draft.id ?? (await newId())
@@ -142,7 +226,7 @@ export async function saveGoal(draft: GoalDraft, today = todayISO()): Promise<nu
         (max, g) => (g.deleted ? max : Math.max(max, g.position + 1)),
         0,
       )
-    await db.goals.put({
+    await putGoal({
       id: goalId,
       area_id: draft.area_id,
       title: draft.title.trim(),
@@ -178,13 +262,15 @@ export async function setGoalStatus(
   status: GoalStatus,
   today = todayISO(),
 ): Promise<void> {
-  const goal = await db.goals.get(goalId)
-  if (!goal) return
-  await db.goals.put({
-    ...goal,
-    status,
-    achieved_on: status === 'achieved' ? today : null,
-    updated_at: stamp(),
+  await db.transaction('rw', db.goals, db.outbox, async () => {
+    const goal = await db.goals.get(goalId)
+    if (!goal) return
+    await putGoal({
+      ...goal,
+      status,
+      achieved_on: status === 'achieved' ? today : null,
+      updated_at: stamp(),
+    })
   })
 }
 
@@ -196,20 +282,22 @@ export async function setGoalStatus(
  * has no more effect on the gym habit than crossing a line out of a notebook.
  */
 export async function deleteGoal(goalId: number): Promise<void> {
-  const goal = await db.goals.get(goalId)
-  if (!goal) return
-  await db.goals.put({ ...goal, deleted: true, updated_at: stamp() })
+  await db.transaction('rw', db.goals, db.outbox, async () => {
+    const goal = await db.goals.get(goalId)
+    if (!goal) return
+    await putGoal({ ...goal, deleted: true, updated_at: stamp() })
+  })
 }
 
 /** Reorders one area's goals to exactly the ids given, in that order. */
 export async function reorderGoals(areaId: number, orderedIds: number[]): Promise<void> {
-  await db.transaction('rw', db.goals, async () => {
+  await db.transaction('rw', db.goals, db.outbox, async () => {
     const now = stamp()
     for (const [position, id] of orderedIds.entries()) {
       const goal = await db.goals.get(id)
       if (!goal || goal.area_id !== areaId) continue
       if (goal.position === position) continue
-      await db.goals.put({ ...goal, position, updated_at: now })
+      await putGoal({ ...goal, position, updated_at: now })
     }
   })
 }
@@ -245,7 +333,7 @@ export interface TaskDraft {
  * occurrence behind it (§3).
  */
 export async function saveTask(draft: TaskDraft, today = todayISO()): Promise<number> {
-  return db.transaction('rw', db.subgoals, db.meta, async () => {
+  return db.transaction('rw', db.subgoals, db.meta, db.outbox, async () => {
     const now = stamp()
     const existing = draft.id == null ? undefined : await db.subgoals.get(draft.id)
     const id = draft.id ?? (await newId())
@@ -258,7 +346,7 @@ export async function saveTask(draft: TaskDraft, today = todayISO()): Promise<nu
       },
       today,
     )
-    await db.subgoals.put({ ...row, id, updated_at: now, deleted: false })
+    await putSubgoal({ ...row, id, updated_at: now, deleted: false })
     return id
   })
 }
@@ -271,16 +359,20 @@ export async function saveTask(draft: TaskDraft, today = todayISO()): Promise<nu
  * those days looked like (§3).
  */
 export async function archiveTask(taskId: number, archived = true): Promise<void> {
-  const task = await db.subgoals.get(taskId)
-  if (!task) return
-  await db.subgoals.put({ ...task, archived, updated_at: stamp() })
+  await db.transaction('rw', db.subgoals, db.outbox, async () => {
+    const task = await db.subgoals.get(taskId)
+    if (!task) return
+    await putSubgoal({ ...task, archived, updated_at: stamp() })
+  })
 }
 
 /** Moves a task to another area. That is the only place a task can live (§3). */
 export async function moveTask(taskId: number, area_id: number): Promise<void> {
-  const task = await db.subgoals.get(taskId)
-  if (!task) return
-  await db.subgoals.put({ ...task, area_id, updated_at: stamp() })
+  await db.transaction('rw', db.subgoals, db.outbox, async () => {
+    const task = await db.subgoals.get(taskId)
+    if (!task) return
+    await putSubgoal({ ...task, area_id, updated_at: stamp() })
+  })
 }
 
 /**
@@ -292,12 +384,12 @@ export async function moveTask(taskId: number, area_id: number): Promise<void> {
  * entirely — they are neither kept nor missed.
  */
 export async function pauseTask(taskId: number, today = todayISO()): Promise<void> {
-  await db.transaction('rw', db.freezes, db.meta, async () => {
+  await db.transaction('rw', db.freezes, db.meta, db.outbox, async () => {
     const open = (await db.freezes.where('subgoal_id').equals(taskId).toArray()).find(
       (f) => !f.deleted && f.end_date == null,
     )
     if (open) return
-    await db.freezes.add({
+    await putFreeze({
       id: await newId(),
       subgoal_id: taskId,
       start_date: today,
@@ -310,7 +402,7 @@ export async function pauseTask(taskId: number, today = todayISO()): Promise<voi
 
 /** Closes the open period. `end_date` is exclusive, so today is live again. */
 export async function resumeTask(taskId: number, today = todayISO()): Promise<void> {
-  await db.transaction('rw', db.freezes, async () => {
+  await db.transaction('rw', db.freezes, db.outbox, async () => {
     const now = stamp()
     for (const period of await db.freezes.where('subgoal_id').equals(taskId).toArray()) {
       if (period.deleted || period.end_date != null) continue
@@ -319,9 +411,9 @@ export async function resumeTask(taskId: number, today = todayISO()): Promise<vo
       if (end === period.start_date) {
         // Paused and resumed on the same day: the period covers no days at
         // all, so it is noise in the history rather than a record of anything.
-        await db.freezes.put({ ...period, end_date: end, deleted: true, updated_at: now })
+        await putFreeze({ ...period, end_date: end, deleted: true, updated_at: now })
       } else {
-        await db.freezes.put({ ...period, end_date: end, updated_at: now })
+        await putFreeze({ ...period, end_date: end, updated_at: now })
       }
     }
   })
@@ -353,9 +445,11 @@ async function liveAreas(): Promise<Area[]> {
 
 /** A blank name is refused rather than stored — an unlabelled spoke is noise. */
 export async function renameArea(areaId: number, name: string): Promise<void> {
-  const area = await db.areas.get(areaId)
-  if (!area) return
-  await db.areas.put({ ...area, name: name.trim() || area.name, updated_at: stamp() })
+  await db.transaction('rw', db.areas, db.outbox, async () => {
+    const area = await db.areas.get(areaId)
+    if (!area) return
+    await putArea({ ...area, name: name.trim() || area.name, updated_at: stamp() })
+  })
 }
 
 /**
@@ -367,13 +461,13 @@ export async function renameArea(areaId: number, name: string): Promise<void> {
 export async function addArea(name: string): Promise<number> {
   const clean = name.trim()
   if (!clean) throw new AreaLimitError('An area needs a name.')
-  return db.transaction('rw', db.areas, db.meta, async () => {
+  return db.transaction('rw', db.areas, db.meta, db.outbox, async () => {
     const areas = await liveAreas()
     if (areas.length >= MAX_AREAS) {
       throw new AreaLimitError(`The star holds ${MAX_AREAS} areas at most.`)
     }
     const id = await newId()
-    await db.areas.put({
+    await putArea({
       id,
       name: clean,
       position: areas.length === 0 ? 0 : areas[areas.length - 1]!.position + 1,
@@ -416,7 +510,7 @@ export async function areaContents(areaId: number): Promise<AreaContents> {
  * app whose only screen is empty has no way back.
  */
 export async function deleteArea(areaId: number): Promise<void> {
-  await db.transaction('rw', db.areas, db.goals, db.subgoals, async () => {
+  await db.transaction('rw', db.areas, db.goals, db.subgoals, db.outbox, async () => {
     const areas = await liveAreas()
     if (areas.length <= MIN_AREAS) {
       throw new AreaLimitError('The last area cannot be removed.')
@@ -425,14 +519,14 @@ export async function deleteArea(areaId: number): Promise<void> {
     if (!area || area.deleted) return
     const now = stamp()
 
-    await db.areas.put({ ...area, deleted: true, updated_at: now })
+    await putArea({ ...area, deleted: true, updated_at: now })
     for (const task of await db.subgoals.where('area_id').equals(areaId).toArray()) {
       if (task.archived) continue
-      await db.subgoals.put({ ...task, archived: true, updated_at: now })
+      await putSubgoal({ ...task, archived: true, updated_at: now })
     }
     for (const goal of await db.goals.where('area_id').equals(areaId).toArray()) {
       if (goal.deleted) continue
-      await db.goals.put({ ...goal, deleted: true, updated_at: now })
+      await putGoal({ ...goal, deleted: true, updated_at: now })
     }
 
     // Positions are compacted so the ring has no gap in it, and so a later
@@ -441,7 +535,7 @@ export async function deleteArea(areaId: number): Promise<void> {
     for (const other of areas) {
       if (other.id === areaId) continue
       if (other.position !== position) {
-        await db.areas.put({ ...other, position, updated_at: now })
+        await putArea({ ...other, position, updated_at: now })
       }
       position++
     }
@@ -450,7 +544,7 @@ export async function deleteArea(areaId: number): Promise<void> {
 
 /** Moves one area `by` places around the ring. Clamped at both ends. */
 export async function moveArea(areaId: number, by: number): Promise<void> {
-  await db.transaction('rw', db.areas, async () => {
+  await db.transaction('rw', db.areas, db.outbox, async () => {
     const areas = await liveAreas()
     const from = areas.findIndex((a) => a.id === areaId)
     if (from < 0) return
@@ -461,7 +555,7 @@ export async function moveArea(areaId: number, by: number): Promise<void> {
     const now = stamp()
     for (const [position, area] of reordered.entries()) {
       if (area.position === position) continue
-      await db.areas.put({ ...area, position, updated_at: now })
+      await putArea({ ...area, position, updated_at: now })
     }
   })
 }
@@ -496,7 +590,7 @@ export async function importSnapshot(raw: unknown, today = todayISO()): Promise<
 
   await db.transaction(
     'rw',
-    [db.areas, db.goals, db.subgoals, db.checkins, db.freezes, db.meta],
+    [db.areas, db.goals, db.subgoals, db.checkins, db.freezes, db.meta, db.outbox],
     async () => {
       await Promise.all([
         db.areas.clear(),
@@ -504,12 +598,28 @@ export async function importSnapshot(raw: unknown, today = todayISO()): Promise<
         db.subgoals.clear(),
         db.checkins.clear(),
         db.freezes.clear(),
+        // The queue describes rows that no longer exist. Everything the import
+        // writes is queued again below, so nothing is lost by clearing it.
+        db.outbox.clear(),
       ])
-      await db.areas.bulkPut(withStamp(snapshot.areas))
-      await db.goals.bulkPut(withStamp(snapshot.goals))
-      await db.subgoals.bulkPut(withStamp(snapshot.subgoals))
-      await db.checkins.bulkPut(withStamp(snapshot.checkins))
-      await db.freezes.bulkPut(withStamp(snapshot.freezes))
+      const areas = withStamp(snapshot.areas)
+      const goals = withStamp(snapshot.goals)
+      const subgoals = withStamp(snapshot.subgoals)
+      const checkins = withStamp(snapshot.checkins)
+      const freezes = withStamp(snapshot.freezes)
+      await db.areas.bulkPut(areas)
+      await db.goals.bulkPut(goals)
+      await db.subgoals.bulkPut(subgoals)
+      await db.checkins.bulkPut(checkins)
+      await db.freezes.bulkPut(freezes)
+      // An import is a local write like any other and has to reach the cloud.
+      await db.outbox.bulkPut([
+        ...areas.map((r) => entry('areas', r.id)),
+        ...goals.map((r) => entry('goals', r.id)),
+        ...subgoals.map((r) => entry('subgoals', r.id)),
+        ...checkins.map((r) => entry('checkins', [r.subgoal_id, r.date] as [number, string])),
+        ...freezes.map((r) => entry('freezes', r.id)),
+      ])
       await reserveIds([
         ...snapshot.areas.map((r) => r.id),
         ...snapshot.goals.map((r) => r.id),

@@ -16,6 +16,33 @@ export interface MetaRow {
   value: unknown
 }
 
+/** The five synced tables, by their storage names (§10). */
+export type SyncTable = 'areas' | 'goals' | 'subgoals' | 'checkins' | 'freezes'
+
+/**
+ * One row waiting to be pushed — SPEC.md §10.
+ *
+ * The outbox records *which* row changed, never what it changed to: push reads
+ * the current local row at send time. That is what makes it collapse rather
+ * than accumulate — ticking the same day five times offline leaves one entry,
+ * and the row that finally goes up is the one the device actually holds.
+ *
+ * `key` is `table:pk`, so re-queueing an already-queued row overwrites its
+ * entry instead of adding a second one.
+ */
+export interface OutboxRow {
+  key: string
+  table: SyncTable
+  /** `id` for the four id-keyed tables; `[subgoal_id, date]` for check-ins. */
+  pk: number | [number, string]
+  queued_at: string
+}
+
+/** The outbox key for one row. Stable, so a re-queue collapses onto itself. */
+export function outboxKey(table: SyncTable, pk: number | [number, string]): string {
+  return Array.isArray(pk) ? `${table}:${pk[0]}|${pk[1]}` : `${table}:${pk}`
+}
+
 /**
  * Ids are `deviceKey * 2^20 + counter` — see `newId` below for why. The
  * constants sit above the class because the v3 upgrade mints ids too, and it
@@ -34,6 +61,7 @@ export class StartemDB extends Dexie {
   checkins!: Table<Checkin, [number, string]>
   freezes!: Table<Freeze, number>
   meta!: Table<MetaRow, string>
+  outbox!: Table<OutboxRow, string>
 
   constructor() {
     super('startem')
@@ -77,12 +105,17 @@ export class StartemDB extends Dexie {
             { area_id: g['area_id'] as number, importance: g['importance'] as string | undefined },
           ]),
         )
+        // A task whose area cannot be worked out lands on a real one. Falling
+        // back to `0` — as this once did — writes an id no area has, and a task
+        // pointing at a missing area is filtered out of every view in §6: on
+        // screen it has silently ceased to exist, with nothing to say so.
+        const fallbackArea = await lowestAreaId(tx)
         await tx
           .table('subgoals')
           .toCollection()
           .modify((row: Record<string, unknown>) => {
             const parent = byId.get(row['goal_id'] as number)
-            row['area_id'] = row['area_id'] ?? parent?.area_id ?? 0
+            row['area_id'] = row['area_id'] ?? parent?.area_id ?? fallbackArea
             row['importance'] = row['importance'] ?? parent?.importance ?? 'medium'
             row['interval'] = row['interval'] ?? 1
             row['start_date'] = row['start_date'] ?? null
@@ -136,6 +169,7 @@ export class StartemDB extends Dexie {
         )
 
         const tasksByGoal = new Map<number, number[]>()
+        const fallbackArea = await lowestAreaId(tx)
         await tx
           .table('subgoals')
           .toCollection()
@@ -146,8 +180,9 @@ export class StartemDB extends Dexie {
               if (bucket) bucket.push(row['id'] as number)
               else tasksByGoal.set(goalId, [row['id'] as number])
             }
-            if (!row['area_id'] && goalId != null) {
-              row['area_id'] = areaOfGoal.get(goalId) ?? 0
+            if (!row['area_id']) {
+              row['area_id'] =
+                (goalId != null ? areaOfGoal.get(goalId) : undefined) ?? fallbackArea
             }
             delete row['goal_id']
           })
@@ -188,7 +223,60 @@ export class StartemDB extends Dexie {
             row['achieved_on'] = row['status'] === 'achieved' ? (row['achieved_on'] ?? null) : null
           })
       })
+
+    /**
+     * v4 — the outbox, and a repair for tasks stranded on a missing area.
+     *
+     * The outbox is what makes §10 survive being offline for days: every local
+     * write appends `{table, pk}` here, and push drains it whenever a network
+     * and a valid session next coincide. It is deliberately *not* one of the
+     * five tables — it never syncs, it is per-device bookkeeping.
+     *
+     * The repair exists because a device upgraded by an earlier build of v2/v3
+     * may already hold tasks whose `area_id` is `0`. Nothing points at area 0,
+     * and §6 drops a task whose area is missing, so those tasks are still on
+     * the device and invisible in the app — the one failure mode that looks
+     * exactly like data loss without being it. Re-home them onto a real area
+     * so they come back; the alternative is that they never do.
+     */
+    this.version(4)
+      .stores({
+        areas: 'id, position',
+        goals: 'id, area_id, status, deleted',
+        subgoals: 'id, area_id, archived, deleted',
+        checkins: '[subgoal_id+date], subgoal_id, date',
+        freezes: 'id, subgoal_id',
+        meta: 'key',
+        outbox: 'key, queued_at',
+      })
+      .upgrade(async (tx) => {
+        const areas = (await tx.table('areas').toArray()) as Record<string, unknown>[]
+        const liveIds = new Set(
+          areas.filter((a) => !a['deleted']).map((a) => a['id'] as number),
+        )
+        if (liveIds.size === 0) return
+        const fallbackArea = Math.min(...liveIds)
+        await tx
+          .table('subgoals')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (!liveIds.has(row['area_id'] as number)) row['area_id'] = fallbackArea
+          })
+      })
   }
+}
+
+/**
+ * The lowest live area id, for upgrades that need somewhere real to put a task
+ * whose own area cannot be recovered. Falls back to `1`, which is what
+ * `ensureSeeded` mints first on a store that has no areas yet.
+ */
+async function lowestAreaId(tx: {
+  table: (name: string) => { toArray: () => Promise<unknown[]> }
+}): Promise<number> {
+  const areas = (await tx.table('areas').toArray()) as Record<string, unknown>[]
+  const ids = areas.filter((a) => !a['deleted']).map((a) => a['id'] as number)
+  return ids.length > 0 ? Math.min(...ids) : 1
 }
 
 // ---------------------------------------------------------------------------
