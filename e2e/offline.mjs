@@ -99,6 +99,9 @@ await step('the service worker takes control and precaches the bundle', async ()
   if (!cached.urls.some((u) => u.endsWith('.js'))) throw new Error('no JS precached')
   if (!cached.urls.some((u) => u === '/' || u.endsWith('index.html')))
     throw new Error('no shell precached')
+  // A tick on a plane should still sound, so the chime rides in the precache
+  // with everything else (§8, §9).
+  if (!cached.urls.some((u) => u.endsWith('.mp3'))) throw new Error('no chime precached')
   console.log(`      ${cached.total} entries in ${cached.names.join(', ')}`)
 })
 

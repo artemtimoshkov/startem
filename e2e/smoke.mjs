@@ -59,6 +59,20 @@ const readStores = (stores) =>
     return out
   }, stores)
 
+/**
+ * The completion chime cannot be heard from here, but its one `play()` can be
+ * counted — which is the part worth asserting: a tick sounds, and nothing else
+ * does (§8). Headless Chromium has no audio output, so the promise is caught.
+ */
+await page.addInitScript(() => {
+  window.__chimes = 0
+  const play = HTMLMediaElement.prototype.play
+  HTMLMediaElement.prototype.play = function () {
+    window.__chimes++
+    return Promise.resolve(play.apply(this, arguments)).catch(() => {})
+  }
+})
+
 await page.goto(BASE, { waitUntil: 'networkidle' })
 
 await step('the day screen renders, and it is the habit screen', async () => {
@@ -156,6 +170,28 @@ await step('crossing out shrinks the target', async () => {
   if (before === after) throw new Error('cross out did nothing')
   console.log(`      target ${before.trim()} -> ${after.trim()}`)
   await page.click('.row:first-of-type .check.cross')
+  await page.waitForTimeout(300)
+})
+
+await step('a tick chimes once; an untick and a cross-out stay silent', async () => {
+  const chimes = () => page.evaluate(() => window.__chimes)
+  const tick = '.row:first-of-type .check:not(.cross)'
+  const start = await chimes()
+
+  await page.click(tick)
+  await page.waitForTimeout(300)
+  const ticked = await chimes()
+  if (ticked !== start + 1) throw new Error(`a tick played ${ticked - start} sounds`)
+
+  // Clearing the row and crossing it out are not completions.
+  await page.click(tick)
+  await page.waitForTimeout(200)
+  await page.click('.row:first-of-type .check.cross')
+  await page.waitForTimeout(300)
+  const after = await chimes()
+  if (after !== ticked) throw new Error(`untick and cross-out played ${after - ticked} sounds`)
+
+  await page.click('.row:first-of-type .check.cross') // back to unresolved
   await page.waitForTimeout(300)
 })
 
